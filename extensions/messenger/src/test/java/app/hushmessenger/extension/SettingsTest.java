@@ -22,6 +22,7 @@ public class SettingsTest {
     @Before public void reset() {
         Settings.initialize(RuntimeEnvironment.getApplication());
         Settings.preferences.edit().clear().commit();
+        AntiUnsendStore.get(RuntimeEnvironment.getApplication()).clearForTests();
         Settings.hookErrors.clear();
         Settings.metaAiTab = null;
         CrashGuard.resetForTests();
@@ -179,6 +180,26 @@ public class SettingsTest {
             assertEquals("text", Settings.labelKeptUnsent("text", "existing-message"));
             assertTrue(Settings.suppressUnsent(true, "existing-message"));
             assertFalse(Settings.suppressUnsent(false, "existing-message"));
+        }
+    }
+
+    @Test @Config(sdk = {28, 36}) public void renderedTextBecomesTheFallbackForAnUnsentMessage() {
+        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
+        assertEquals("cached before revoke", Settings.labelKeptUnsent("cached before revoke", "cached-message"));
+        Settings.recordUnsent("cached-message");
+        assertEquals("[unsent] cached before revoke", Settings.labelKeptUnsent(null, "cached-message"));
+        assertEquals("cached before revoke", Settings.cachedUnsentText("cached-message"));
+        assertEquals(1, AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listUnsent(10).size());
+    }
+
+    @Test public void settingsExposeLocalUnsentHistory() {
+        try (var controller = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            View history = controller.get().getWindow().getDecorView().findViewWithTag("unsent_history");
+            assertNotNull(history);
+            history.performClick();
+            Intent launched = Shadows.shadowOf(controller.get()).getNextStartedActivity();
+            assertNotNull(launched);
+            assertEquals(UnsentHistoryActivity.class.getName(), launched.getComponent().getClassName());
         }
     }
 
