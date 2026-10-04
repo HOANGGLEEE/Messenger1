@@ -113,9 +113,9 @@ public class SettingsTest {
             assertTrue(choice.isChecked());
             String spoken = choice.getContentDescription().toString();
             assertTrue(spoken.contains("legacy unsend routes"));
-            assertTrue(spoken.contains("End-to-end encrypted chats aren't supported"));
-            assertTrue(spoken.contains("group coverage isn't verified"));
-            assertTrue(spoken.contains("not whether a chat is supported"));
+            assertTrue(spoken.contains("private local history"));
+            assertTrue(spoken.contains("captured it before the revoke"));
+            assertTrue(spoken.contains("unseen-message receive coverage are not yet verified"));
             assertEquals("No unsend activity observed since restart",
                 ((android.widget.TextView) root.findViewWithTag("active_keep_unsent")).getText().toString());
         }
