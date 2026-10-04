@@ -92,12 +92,17 @@ public final class UnsentHistoryActivity extends Activity {
         DateFormat dates = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT);
         for (AntiUnsendStore.Entry entry : entries) {
             LinearLayout card = ui.panel();
+            String sender = entry.senderId == null || entry.senderId.isEmpty()
+                ? text.get("unsent_history_unknown_sender") : entry.senderId;
+            ui.add(card, ui.text(text.get("unsent_history_sender", sender), 13, ui.muted, true), 0);
             TextView body = ui.text(entry.text == null || entry.text.isEmpty()
                 ? text.get("unsent_history_missing_text") : entry.text, 16, ui.text, false);
             body.setTextIsSelectable(true);
-            ui.add(card, body, 0);
+            ui.add(card, body, 8);
+            ui.add(card, ui.text(text.get("unsent_history_received_at",
+                dates.format(new Date(entry.receivedAt))), 12, ui.muted, false), 10);
             ui.add(card, ui.text(text.get("unsent_history_unsent_at",
-                dates.format(new Date(entry.unsentAt))), 12, ui.muted, false), 10);
+                dates.format(new Date(entry.unsentAt))), 12, ui.muted, false), 4);
             ui.add(list, card, 12);
         }
     }
