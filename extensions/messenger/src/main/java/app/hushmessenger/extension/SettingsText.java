@@ -211,6 +211,9 @@ final class SettingsText {
         ENGLISH.put("unsent_history_read_failed", "Couldn't read unsent history.");
         ENGLISH.put("unsent_history_empty", "No unsent messages have been recorded yet.");
         ENGLISH.put("unsent_history_missing_text", "Content wasn't captured before this message was unsent.");
+        ENGLISH.put("unsent_history_unknown_sender", "Unknown sender");
+        ENGLISH.put("unsent_history_sender", "Sender: %s");
+        ENGLISH.put("unsent_history_received_at", "Received %s");
         ENGLISH.put("unsent_history_unsent_at", "Unsent %s");
         ENGLISH.put("error_now", "Stopped with an error just now");
         ENGLISH.put("error_ago", "Stopped with an error %s ago");
