@@ -274,12 +274,35 @@ public final class Settings {
 
     private static final String KEPT_UNSENT_KEY = "kept_unsent_ids";
 
+    /**
+     * Capture a plaintext snapshot as soon as a verified Messenger receive/persist hook can provide one.
+     * Phase 1 exposes this bridge without guessing an obfuscated hook. It is intentionally a no-op while
+     * Keep unsent messages is off, paused or in safe mode.
+     */
+    public static void captureIncomingMessage(String messageId, String text) {
+        if (messageId == null || messageId.isEmpty() || text == null || text.isEmpty() || !wouldUse("keep_unsent")) return;
+        Context context = appContext;
+        if (context == null) return;
+        try {
+            AntiUnsendStore.get(context).captureText(messageId, text, System.currentTimeMillis());
+        } catch (RuntimeException error) {
+            hookFailedPrivately("keep_unsent", "Can't cache incoming message text", error);
+        }
+    }
+
     public static synchronized void recordUnsent(String messageId) {
         if (messageId == null || messageId.isEmpty() || !wouldUse("keep_unsent")) return;
         SharedPreferences prefs = preferences;
         if (prefs == null) return;
         Set<String> ids = new HashSet<>(prefs.getStringSet(KEPT_UNSENT_KEY, Collections.emptySet()));
         if (ids.add(messageId)) prefs.edit().putStringSet(KEPT_UNSENT_KEY, ids).apply();
+        Context context = appContext;
+        if (context != null) try {
+            AntiUnsendStore.get(context).markUnsent(messageId, System.currentTimeMillis());
+        } catch (RuntimeException error) {
+            // The legacy SharedPreferences marker remains the fallback; database failure must never crash Messenger.
+            hookFailedPrivately("keep_unsent", "Can't record unsent message history", error);
+        }
         activeAt.put("keep_unsent", System.currentTimeMillis());
     }
 
@@ -290,10 +313,23 @@ public final class Settings {
         return prefs.getStringSet(KEPT_UNSENT_KEY, Collections.emptySet()).contains(messageId);
     }
 
+    /** Restore cached text only for a message already observed as unsent. */
+    static String cachedUnsentText(String messageId) {
+        Context context = appContext;
+        if (context == null || messageId == null || messageId.isEmpty()) return null;
+        try {
+            return AntiUnsendStore.get(context).unsentText(messageId);
+        } catch (RuntimeException error) {
+            hookFailedPrivately("keep_unsent", "Can't restore cached unsent text", error);
+            return null;
+        }
+    }
+
     public static String labelKeptUnsent(String text, String messageId) {
-        if (!wouldUse("keep_unsent") || text == null) return text;
-        if (isKeptUnsent(messageId)) return "[unsent] " + text;
-        return text;
+        if (!wouldUse("keep_unsent") || !isKeptUnsent(messageId)) return text;
+        String original = text;
+        if (original == null || original.isEmpty()) original = cachedUnsentText(messageId);
+        return original == null || original.isEmpty() ? text : "[unsent] " + original;
     }
 
     public static boolean suppressUnsent(boolean original, String messageId) {
