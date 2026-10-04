@@ -25,3 +25,4 @@ CODEX_CHANGELOG.md
 !README.md
 !CHANGELOG.md
 .ruff_cache/
+.secrets/
