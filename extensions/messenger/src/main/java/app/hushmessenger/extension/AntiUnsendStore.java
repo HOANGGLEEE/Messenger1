@@ -86,6 +86,10 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         first.put("last_seen_at", now);
         long inserted = db.insertWithOnConflict("messages", null, first, SQLiteDatabase.CONFLICT_IGNORE);
         if (inserted == -1) {
+            ContentValues seen = new ContentValues();
+            seen.put("last_seen_at", now);
+            db.update("messages", seen, "message_id=?", new String[] {messageId});
+
             ContentValues missing = new ContentValues();
             if (threadId != null && !threadId.isEmpty()) missing.put("thread_id", threadId);
             if (senderId != null && !senderId.isEmpty()) missing.put("sender_id", senderId);
