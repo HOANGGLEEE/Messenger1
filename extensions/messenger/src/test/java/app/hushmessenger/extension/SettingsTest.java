@@ -1,6 +1,7 @@
 package app.hushmessenger.extension;
 
 import android.net.Uri;
+import android.view.View;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
