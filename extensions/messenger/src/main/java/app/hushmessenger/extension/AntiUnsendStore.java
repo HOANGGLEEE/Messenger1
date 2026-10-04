@@ -20,12 +20,21 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
 
     static final class Entry {
         final String messageId;
+        final String threadId;
+        final String senderId;
         final String text;
+        final long messageTimestamp;
+        final long receivedAt;
         final long unsentAt;
 
-        Entry(String messageId, String text, long unsentAt) {
+        Entry(String messageId, String threadId, String senderId, String text,
+                long messageTimestamp, long receivedAt, long unsentAt) {
             this.messageId = messageId;
+            this.threadId = threadId;
+            this.senderId = senderId;
             this.text = text;
+            this.messageTimestamp = messageTimestamp;
+            this.receivedAt = receivedAt;
             this.unsentAt = unsentAt;
         }
     }
@@ -48,8 +57,11 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE messages (" +
             "message_id TEXT PRIMARY KEY NOT NULL," +
+            "thread_id TEXT," +
+            "sender_id TEXT," +
             "text TEXT," +
-            "first_seen_at INTEGER NOT NULL," +
+            "message_timestamp INTEGER," +
+            "received_at INTEGER NOT NULL," +
             "last_seen_at INTEGER NOT NULL," +
             "unsent_at INTEGER)");
         db.execSQL("CREATE INDEX messages_unsent_at ON messages(unsent_at DESC)");
@@ -60,23 +72,26 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         // Version 1 is the first private anti-unsend store.
     }
 
-    synchronized void captureText(String messageId, String text, long now) {
+    synchronized void captureText(String messageId, String threadId, String senderId,
+            String text, long messageTimestamp, long now) {
         if (messageId == null || messageId.isEmpty() || text == null || text.isEmpty()) return;
         SQLiteDatabase db = getWritableDatabase();
         ContentValues first = new ContentValues();
         first.put("message_id", messageId);
+        if (threadId != null && !threadId.isEmpty()) first.put("thread_id", threadId);
+        if (senderId != null && !senderId.isEmpty()) first.put("sender_id", senderId);
         first.put("text", text);
-        first.put("first_seen_at", now);
+        if (messageTimestamp > 0) first.put("message_timestamp", messageTimestamp);
+        first.put("received_at", now);
         first.put("last_seen_at", now);
         long inserted = db.insertWithOnConflict("messages", null, first, SQLiteDatabase.CONFLICT_IGNORE);
         if (inserted == -1) {
-            ContentValues seen = new ContentValues();
-            seen.put("last_seen_at", now);
-            db.update("messages", seen, "message_id=?", new String[] {messageId});
-
-            ContentValues missingText = new ContentValues();
-            missingText.put("text", text);
-            db.update("messages", missingText,
+            ContentValues missing = new ContentValues();
+            if (threadId != null && !threadId.isEmpty()) missing.put("thread_id", threadId);
+            if (senderId != null && !senderId.isEmpty()) missing.put("sender_id", senderId);
+            missing.put("text", text);
+            if (messageTimestamp > 0) missing.put("message_timestamp", messageTimestamp);
+            db.update("messages", missing,
                 "message_id=? AND (text IS NULL OR text='')", new String[] {messageId});
         }
         pruneOccasionally(db, now);
@@ -87,7 +102,7 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         SQLiteDatabase db = getWritableDatabase();
         ContentValues first = new ContentValues();
         first.put("message_id", messageId);
-        first.put("first_seen_at", now);
+        first.put("received_at", now);
         first.put("last_seen_at", now);
         first.put("unsent_at", now);
         long inserted = db.insertWithOnConflict("messages", null, first, SQLiteDatabase.CONFLICT_IGNORE);
@@ -114,13 +129,18 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         if (limit <= 0) return Collections.emptyList();
         List<Entry> entries = new ArrayList<>();
         try (Cursor cursor = getReadableDatabase().query(
-                "messages", new String[] {"message_id", "text", "unsent_at"},
+                "messages", new String[] {"message_id", "thread_id", "sender_id", "text",
+                    "message_timestamp", "received_at", "unsent_at"},
                 "unsent_at IS NOT NULL", null, null, null, "unsent_at DESC", Integer.toString(limit))) {
             while (cursor.moveToNext()) {
                 entries.add(new Entry(
                     cursor.getString(0),
                     cursor.isNull(1) ? null : cursor.getString(1),
-                    cursor.getLong(2)));
+                    cursor.isNull(2) ? null : cursor.getString(2),
+                    cursor.isNull(3) ? null : cursor.getString(3),
+                    cursor.isNull(4) ? 0 : cursor.getLong(4),
+                    cursor.getLong(5),
+                    cursor.getLong(6)));
             }
         }
         return entries;
@@ -136,7 +156,7 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
     }
 
     private void prune(SQLiteDatabase db, long now) {
-        db.delete("messages", "last_seen_at<?", new String[] {Long.toString(now - RETENTION_MS)});
+        db.delete("messages", "received_at<?", new String[] {Long.toString(now - RETENTION_MS)});
         int count = 0;
         try (Cursor cursor = db.rawQuery("SELECT COUNT(*) FROM messages", null)) {
             if (cursor.moveToFirst()) count = cursor.getInt(0);
