@@ -83,7 +83,7 @@ public class SettingsTest {
         assertFalse(Settings.isKeptUnsent(null));
         assertEquals("[unsent] original text", Settings.labelKeptUnsent("original text", "retained-message"));
         assertEquals("ordinary text", Settings.labelKeptUnsent("ordinary text", "other-message"));
-        assertNull(Settings.labelKeptUnsent(null, "retained-message"));
+        assertEquals("[unsent] original text", Settings.labelKeptUnsent(null, "retained-message"));
         assertFalse(Settings.suppressUnsent(true, "retained-message"));
         assertFalse(Settings.suppressUnsent(false, "retained-message"));
         assertTrue(Settings.suppressUnsent(true, "other-message"));
