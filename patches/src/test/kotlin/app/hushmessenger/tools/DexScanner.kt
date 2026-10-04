@@ -242,6 +242,58 @@ object DexScanner {
         }
     }
 
+    private fun scanIncomingMessages(classes: List<ClassDef>) {
+        println("\n=== INCOMING MESSAGE / PERSISTENCE CANDIDATES ===\n")
+        val identity = listOf("message_id", "messageId", "offline_threading_id")
+        val content = listOf("text=", "message_text", "messageText", "message_body")
+        val context = listOf("thread_key", "threadKey", "thread_id", "threadId", "sender_id", "senderId", "actor_id")
+        val persistence = listOf("insert", "upsert", "persist", "store", "receive", "incoming", "message_sync")
+
+        var shown = 0
+        for (cls in classes) {
+            for (method in cls.methods) {
+                val code = method.implementation?.instructions?.toList() ?: continue
+                val strings = code.mapNotNull { ((it as? ReferenceInstruction)?.reference as? StringReference)?.string }
+                val refs = code.mapNotNull { (it as? ReferenceInstruction)?.reference?.toString() }
+                fun has(patterns: List<String>) =
+                    strings.any { value -> patterns.any { value.contains(it, ignoreCase = true) } } ||
+                    refs.any { value -> patterns.any { value.contains(it, ignoreCase = true) } }
+
+                var score = 0
+                if (has(identity)) score += 3
+                if (has(content)) score += 3
+                if (has(context)) score += 2
+                if (has(persistence)) score += 2
+                val redex = cls.redexName().orEmpty()
+                if (redex.contains("Message", ignoreCase = true)) score++
+                if (listOf("Insert", "Store", "Persist", "Receive", "Incoming", "Sync")
+                        .any { redex.contains(it, ignoreCase = true) }) score++
+
+                if (score < 6 || (!has(identity) && !has(content))) continue
+                shown++
+                println("  SCORE $score: \${method.id()}")
+                println("    Class: \${cls.type}")
+                println("    Redex: \${cls.redexName() ?: "(none)"}")
+                println("    Params: \${method.parameterTypes}")
+                val matchedStrings = strings.filter { value ->
+                    (identity + content + context + persistence).any { value.contains(it, ignoreCase = true) }
+                }.distinct().take(16)
+                if (matchedStrings.isNotEmpty()) println("    Strings: $matchedStrings")
+                val matchedRefs = refs.filter { value ->
+                    (identity + content + context + persistence).any { value.contains(it, ignoreCase = true) }
+                }.distinct().take(20)
+                if (matchedRefs.isNotEmpty()) println("    Refs: $matchedRefs")
+                println()
+                if (shown >= 120) {
+                    println("  Stopped after 120 candidates.")
+                    return
+                }
+            }
+        }
+        println("  Incoming/persistence candidates shown: $shown")
+        println("  Do not hook a candidate until its parameters/fields prove plaintext exists before UI read/seen.")
+    }
+
     private fun scanVanishMode(classes: List<ClassDef>) {
         println("\n=== VANISH MODE / DISAPPEARING MESSAGES ===\n")
         val patterns = listOf(
@@ -299,14 +351,16 @@ object DexScanner {
             "flag_secure" -> scanFlagSecure(classes)
             "read_receipt" -> scanReadReceipts(classes)
             "anti_unsend" -> scanAntiUnsend(classes)
+            "incoming_message" -> scanIncomingMessages(classes)
             "vanish" -> scanVanishMode(classes)
             "all" -> {
                 scanFlagSecure(classes)
                 scanReadReceipts(classes)
                 scanAntiUnsend(classes)
+                scanIncomingMessages(classes)
                 scanVanishMode(classes)
             }
-            else -> println("Unknown feature: $feature (use flag_secure, read_receipt, anti_unsend, vanish, or all)")
+            else -> println("Unknown feature: $feature (use flag_secure, read_receipt, anti_unsend, incoming_message, vanish, or all)")
         }
     }
 }
