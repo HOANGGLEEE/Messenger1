@@ -112,9 +112,10 @@ public final class HostScreens {
                 return;
             }
             List<ShortcutInfo> missing = new ArrayList<>();
-            if (!published.contains(CONTROLS_SHORTCUT)) missing.add(shortcut(context, CONTROLS_SHORTCUT, "Patch controls", SETTINGS,
+            SettingsText text = new SettingsText(context);
+            if (!published.contains(CONTROLS_SHORTCUT)) missing.add(shortcut(context, CONTROLS_SHORTCUT, text.get("patch_controls"), SETTINGS,
                 android.R.drawable.ic_menu_preferences, 0));
-            if (!published.contains(RESTART_SHORTCUT)) missing.add(shortcut(context, RESTART_SHORTCUT, "Restart Messenger", RESTART,
+            if (!published.contains(RESTART_SHORTCUT)) missing.add(shortcut(context, RESTART_SHORTCUT, text.get("restart"), RESTART,
                 android.R.drawable.ic_popup_sync, 1));
             if (!missing.isEmpty()) manager.addDynamicShortcuts(missing);
         } catch (RuntimeException error) {

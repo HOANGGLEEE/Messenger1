@@ -109,6 +109,7 @@ final class SettingsText {
         ENGLISH.put("drawer_missing", "Hide app drawer icon is unavailable because this bundle has no settings launcher alias.");
         ENGLISH.put("drawer_requires_menu", "Hide app drawer icon requires the HushMessenger row in Messenger's Menu tab or side menu. The icon stays available when shortcuts are the only other entry route.");
         ENGLISH.put("restart", "Restart Messenger");
+        ENGLISH.put("patch_controls", "Patch controls");
         ENGLISH.put("restarting", "Restarting Messenger...");
         ENGLISH.put("restart_unavailable", "Couldn't restart. Close Messenger, then open it from your app drawer.");
         ENGLISH.put("settings_open_failed", "Couldn't open HushMessenger settings. Long-press Messenger's home screen icon and try Patch controls.");

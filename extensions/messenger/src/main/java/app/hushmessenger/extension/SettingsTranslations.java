@@ -18,6 +18,7 @@ final class SettingsTranslations {
 
     static {
         // Add a locale with one line here, for example: add("pt-BR", SettingsTextPtBr.TEXT);
+        add("vi", SettingsTextVi.TEXT);
     }
 
     static void add(String tag, String[][] pairs) {
