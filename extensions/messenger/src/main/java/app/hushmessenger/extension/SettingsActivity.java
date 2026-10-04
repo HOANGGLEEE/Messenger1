@@ -493,7 +493,7 @@ public final class SettingsActivity extends Activity {
                 ui.add(wrapper, row, 0);
                 Button history = ui.button(text.get("unsent_history_title"));
                 history.setTag("unsent_history");
-                history.setOnClickListener(view -> startActivity(new Intent(this, UnsentHistoryActivity.class)));
+                history.setOnClickListener(view -> HostScreens.open(this, HostScreens.HISTORY));
                 ui.add(wrapper, history, 8);
                 ui.add(wrapper, ui.text(text.get("unsent_history_entry_help"), 13, ui.muted, false), 8);
                 row = wrapper;
