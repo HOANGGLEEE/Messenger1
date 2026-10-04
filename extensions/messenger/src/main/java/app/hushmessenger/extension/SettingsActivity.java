@@ -717,6 +717,13 @@ public final class SettingsActivity extends Activity {
         restart.setTag("restart_messenger");
         restart.setOnClickListener(view -> HostScreens.open(this, HostScreens.RESTART));
         ui.add(access, restart, 14);
+        if (Settings.installed.contains("keep_unsent")) {
+            Button history = ui.button(text.get("unsent_history_title"));
+            history.setTag("unsent_history");
+            history.setOnClickListener(view -> startActivity(new Intent(this, UnsentHistoryActivity.class)));
+            ui.add(access, history, 10);
+            ui.add(access, ui.text(text.get("unsent_history_entry_help"), 13, ui.muted, false), 8);
+        }
         // Without the Menu row, a launcher that has no app shortcuts would leave no way back in.
         if (menuRow && drawerAlias && !hosted) {
             ui.rule(access, 14);
