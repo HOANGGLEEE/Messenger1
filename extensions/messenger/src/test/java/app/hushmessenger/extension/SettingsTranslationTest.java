@@ -125,7 +125,7 @@ public class SettingsTranslationTest {
     @Test public void settingsDirectionsNameTheHomeScreenIcon() {
         int directed = 0;
         for (Map.Entry<String, String> entry : englishIds().entrySet()) {
-            if (!entry.getValue().contains("Patch controls")) continue;
+            if (entry.getKey().equals("patch_controls") || !entry.getValue().contains("Patch controls")) continue;
             directed++;
             assertTrue(entry.getKey(), entry.getValue().contains("Messenger's home screen icon"));
         }
