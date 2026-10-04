@@ -1,7 +1,7 @@
 ![HushMessenger. Keep the conversation. Cut the friction.](assets/readme-hero.png)
 
 <p align="center">
-  <a href="https://github.com/HOANGGLEEE/Messenger1"><img src="https://img.shields.io/badge/development-0.20.0-0084FF" alt="Development 0.20.0"></a>
+  <a href="https://github.com/HOANGGLEEE/Messenger1"><img src="https://img.shields.io/badge/development-0.20.1-0084FF" alt="Development 0.20.1"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License GPL-3.0"></a>
   <img src="https://img.shields.io/badge/platform-Android%209%2B%20arm64-3DDC84" alt="Platform Android 9 or newer, arm64">
   <img src="https://img.shields.io/badge/Messenger-580%20and%20581-0084FF" alt="Messenger 580.0.0.49.91 and 581.0.0.49.91">
@@ -12,7 +12,7 @@
 
 HushMessenger is a Morphe patch source for Facebook Messenger. It offers 33 patches. 30 of them are optional controls with searchable settings and long-press shortcuts, and the other three help a re-signed build install, open and reach those settings. You bring the original Messenger APK. This repository provides the patch code and a `.mpp` bundle.
 
-The source builds development v0.20.0. The public download and Morphe source serve v0.14.0. Development adds Messenger 581.0.0.49.91, every arm64 build APKMirror lists under that name. Settings give each control's full row one accessible touch target. Development also extends AI sticker hiding to Generate buttons and screenshot access to view-once media and Quicksnap. Hide joined community chats now removes joined channels and announcements from the main Chats display. It starts off and keeps the original list for Off or Pause. Changes apply on the next inbox render.
+The source, public download and Morphe source serve v0.20.1. This release supports Messenger 581.0.0.49.91, including every arm64 build APKMirror lists under that name. Settings give each control's full row one accessible touch target. It also extends AI sticker hiding to Generate buttons and screenshot access to view-once media and Quicksnap. Hide joined community chats removes joined channels and announcements from the main Chats display. It starts off and keeps the original list for Off or Pause. Changes apply on the next inbox render.
 
 v0.14.0 adds **Native Bubbles** to **Allow chat bubbles** ([#19](https://github.com/HOANGGLEEE/Messenger1/issues/19)) and **Slide chats in and out**, an optional slide for chats you open from the chat list or search ([#28](https://github.com/HOANGGLEEE/Messenger1/issues/28)). Settings now open from Messenger's side menu as well as its Menu tab ([#26](https://github.com/HOANGGLEEE/Messenger1/issues/26)), and **Use system emoji** draws your phone's own emoji on Android 12 and newer ([#25](https://github.com/HOANGGLEEE/Messenger1/issues/25)). On Root Mount installs, HushMessenger adds the **Patch controls** and **Restart Messenger** shortcuts itself, because Android never reads the patched ones there ([#27](https://github.com/HOANGGLEEE/Messenger1/issues/27)). The [changelog](CHANGELOG.md) has the rest.
 
@@ -28,7 +28,7 @@ v0.14.0 adds **Native Bubbles** to **Allow chat bubbles** ([#19](https://github.
 3. **Check the source.** The HushMessenger card should show **32 patches**. Open **Patches** to browse the catalog. **Material You theme** starts unselected when patching. Use **Choose patches** to include it or leave other controls out. Tap the card's refresh button if it stays on an old version.
 4. **Choose one source.** Use the remote or local HushMessenger source. Adding both creates two cards with the same name, which can point to different versions. If other sources offer Messenger patches, choose the one you intend. Mixing independent patches can cause conflicts.
 
-For a local source, download [`patches-0.20.0.mpp`](https://github.com/HOANGGLEEE/Messenger1/releases/tag/v0.20.0) and add it through **Sources > + > Local**. A local source won't update itself. The `.mpp` file is a patch bundle, not an installable Messenger APK. These source steps follow [Morphe's source guide](https://github.com/MorpheApp/morphe-manager/blob/main/docs/patch-sources.md). Morphe Desktop can load the same source URL. Source refreshes download patches; they don't modify an installed Messenger app.
+For a local source, download [`patches-0.20.1.mpp`](https://github.com/HOANGGLEEE/Messenger1/releases/tag/v0.20.1) and add it through **Sources > + > Local**. A local source won't update itself. The `.mpp` file is a patch bundle, not an installable Messenger APK. These source steps follow [Morphe's source guide](https://github.com/MorpheApp/morphe-manager/blob/main/docs/patch-sources.md). Morphe Desktop can load the same source URL. Source refreshes download patches; they don't modify an installed Messenger app.
 
 ### If something doesn't work
 
@@ -36,7 +36,7 @@ The **HushMessenger settings** icon belongs to the same installed app as Messeng
 
 - **Can't find the settings:** Long-press Messenger's icon on your home screen (not the Messenger title inside the app) and tap **Patch controls**. Bundles with a settings launcher alias also offer **HushMessenger settings** in the app drawer. The Menu tab or side menu has a **HushMessenger** row when that patch is included. **Hide app drawer icon** appears in App only when both the alias and Menu route are available. Root Mount has no separate icon. App explains missing routes, and searching for "drawer icon" links to that explanation or toggle. If none of the entry routes appear, refresh the source and patch Messenger again.
 - **Switches have no effect:** The settings must be embedded in the patched Messenger APK. A separate settings preview cannot change stock Messenger. Both test phones run patched builds with the embedded controls. Refreshing a Morphe source only downloads patches. Use **Restart Messenger** after changing inbox options or the Meta AI tab, which only changes on a restart, even when you pause.
-- **Patch missing:** Refresh the HushMessenger source, check that it shows v0.14.0 and open its **Patches** list. This public release doesn't require the pre-release switch.
+- **Patch missing:** Refresh the HushMessenger source, check that it shows v0.20.1 and open its **Patches** list. This public release doesn't require the pre-release switch.
 - **APK rejected:** Use an unmodified arm64 Messenger 580.0.0.49.91 APK. Every arm64 variant APKMirror has for that version works, and the version codes are listed under [Supported Messenger builds](#supported-messenger-builds). If a permission or instruction check fails, the error names the tested builds.
 - **Android rejects installation over stock Messenger:** A re-signed APK can't replace Meta's signed copy. Keep your local data intact while you plan a backup. Future updates of your patched copy must reuse your key. See [Morphe's keystore guide](https://github.com/MorpheApp/morphe-manager/blob/main/docs/backup-and-keystore.md).
 - **Local source still old:** Download the latest `.mpp` and replace the local source yourself.
@@ -174,7 +174,7 @@ The [patch catalog](patches-list.json) lists all 33 development patches with the
 
 Each control is a separate patch. They share one settings extension, and manifest metadata records which controls were installed. Selecting one control only edits its hooks, and omitted controls have no active switches. Saved preferences remain available if you select the feature again later.
 
-The development source checks 100 hook methods in each supported APK; public v0.14.0 checks 95. Plugin gates must retain their expected enable/disable branch and return constants. The tab, browser, ad-filter, keyboard and typing edits check their specific instruction sites. Each control validates every target before editing its first method, and its settings entry is recorded only after success. A missing or ambiguous target stops that control. Changed media-viewer or community code leaves unrelated controls available. The settings provider is private, and its launcher accepts no external commands to change preferences. Since v0.5.0, Restart Messenger is private too, so only Messenger and its own launcher shortcuts can start it. v0.4.2 and earlier let other apps start it.
+The v0.20.1 source checks 100 hook methods in each supported APK. Plugin gates must retain their expected enable/disable branch and return constants. The tab, browser, ad-filter, keyboard and typing edits check their specific instruction sites. Each control validates every target before editing its first method, and its settings entry is recorded only after success. A missing or ambiguous target stops that control. Changed media-viewer or community code leaves unrelated controls available. The settings provider is private, and its launcher accepts no external commands to change preferences. Since v0.5.0, Restart Messenger is private too, so only Messenger and its own launcher shortcuts can start it. v0.4.2 and earlier let other apps start it.
 
 ### Install beside Meta apps
 
@@ -208,7 +208,7 @@ Always on. It adds a **HushMessenger** row right under Settings in Messenger's *
 
 APKMirror's 580.0.0.49.91 release has 25 variants, and all 21 arm64 ones are supported. Six are "nodpi" builds: `346013354` (a bundle), `346013370`, `346013387`, `346013394`, `346013423` and `346013440`. The other 15 are each made for one screen density, and `346013442` is also on APKPure. The four 32-bit (armeabi-v7a) variants aren't supported. Meta's build tooling gives the same code different internal names from one build to the next, so the patch keeps a checked list per naming. One list covers eight builds, and four more cover the other 13. A build that isn't listed here is rejected before anything changes. Builds `346013354` ([issue 3](https://github.com/HOANGGLEEE/Messenger1/issues/3)) and `346013370` ([issue 1](https://github.com/HOANGGLEEE/Messenger1/issues/1), [issue 8](https://github.com/HOANGGLEEE/Messenger1/issues/8)) were the first ones people ran into.
 
-Development v0.20.0 adds Messenger 581.0.0.49.91. APKMirror lists 19 variants of it, and all 16 arm64 ones are supported, including `346213583`, which it labels a bundle. All 16 share one internal naming. The public v0.14.0 download patches 580 builds, so pair it with a 580 APK until a release carries 581.
+Development v0.20.0 added Messenger 581.0.0.49.91, and v0.20.1 carries that support into the public release. APKMirror lists 19 variants of it, and all 16 arm64 ones are supported, including `346213583`, which it labels a bundle. All 16 share one internal naming.
 
 SHA-256 of the stock base APKs used for the off-device checks:
 
@@ -273,7 +273,7 @@ The Patcher 1.15.0 migration passed all 21 supported inputs at 1024 MB and repro
 
 The v0.17.0 development build also updated an existing Galaxy S25 installation in place with its original signing key. The original install date, signed-in inbox and known encrypted-chat history remained.
 
-The v0.19.2 frozen development bundle has SHA-256 `e7c978962d3ace5d52915ad1059f421df1a95119bd900de1b3400a221f8a1897`. It rebuilds the same patch code that passed all 21 supported builds at 1024 MB in v0.19.1 with all 33 patches selected. All three builds that had failed earlier discovery pass, and one build from each of the five mapping groups patched and signed with v3 signatures, kept every native library unchanged and had no duplicate classes. Its checksum file is signed and verifies with the release key. The public release stays at v0.14.0.
+The v0.19.2 frozen development bundle has SHA-256 `e7c978962d3ace5d52915ad1059f421df1a95119bd900de1b3400a221f8a1897`. It rebuilds the same patch code that passed all 21 supported builds at 1024 MB in v0.19.1 with all 33 patches selected. All three builds that had failed earlier discovery pass, and one build from each of the five mapping groups patched and signed with v3 signatures, kept every native library unchanged and had no duplicate classes. Its checksum file is signed and verifies with the release key. At that point, the public release was still v0.14.0.
 
 Focused dependency checks compile five partial selections, including deliberate sibling failures and a following selection with different controls. They check finalized capabilities and single settings and extension injection. These synthetic fixtures don't prove every switch combination or native UI behavior.
 
@@ -304,10 +304,10 @@ While the public source is held, validate development separately and freeze its 
 
 ```powershell
 $heldHash = (Get-FileHash .\patches-bundle.json -Algorithm SHA256).Hash.ToLowerInvariant()
-$freeze = Join-Path $env:TEMP "hushmessenger-0.20.0"
+$freeze = Join-Path $env:TEMP "hushmessenger-0.20.1"
 .\gradlew.bat :patches:buildAndroid --no-daemon
 python scripts/check_release.py --development --held-index-sha256 $heldHash --freeze $freeze
-$bundle = Join-Path $freeze "patches-0.20.0.mpp"
+$bundle = Join-Path $freeze "patches-0.20.1.mpp"
 $bundleHash = (Get-FileHash $bundle -Algorithm SHA256).Hash.ToLowerInvariant()
 ```
 
@@ -323,20 +323,20 @@ python scripts/verify_patch_heap.py --stock-dir .\private-apks --bundle $bundle 
 
 The check runs at most two builds at once. Each Java process has a 1024 MB heap and uses two processors. Each build runs in its own temporary folder with all patches selected. The check rechecks the frozen bundle's checksum, verifies the stock checksum before and after patching, inspects the output APK and compares the theme's class, surface and color-call counts with `CompatReport.java`. Failures include the subprocess exit code. It removes its temporary APKs and leaves the stock files unchanged. Use `--codes 346013440` to check one build.
 
-The output from main is `patches/build/libs/patches-0.20.0.mpp`. Dependency locks and SHA-256 checks are committed. Review both when changing a dependency. Clean builds from the same source produce the same bundle checksum.
+The output from main is `patches/build/libs/patches-0.20.1.mpp`. Dependency locks and SHA-256 checks are committed. Review both when changing a dependency. Clean builds from the same source produce the same bundle checksum.
 
 Recording a compatibility profile requires a real patch run. Run `:patches:test` first to compile the local validation tool. With Python 3.11 or newer on PATH and Android Build Tools available, run `CompatReport <apk> --save <profiles directory> <desktop.jar> <bundle.mpp>`. The reporter first checks discovery, then uses Desktop to apply every patch, including Material You, and rebuild a temporary unsigned APK at a 1024 MB heap. It parses the rebuilt manifest and resource table with `aapt2` and structurally validates every DEX. Failed or incomplete results leave the profile directory unchanged. A discovery-only PASS doesn't prove that the patcher can apply the bundle. For a new mapping, use the printed Kotlin to update the source and build the candidate bundle before recording it.
 
 After changing patch metadata, run `:patches:generatePatchCatalog` and review `patches-list.json`. The normal `:patches:check` task checks the committed catalog against the built bundle and checks all 30 control keys against the extension and manifest. It fails on drift instead of rewriting the catalog.
 
-Before publishing, synchronize the release version, source index, changelog and README checksum, then run `:patches:verifyReleaseMetadata`. This loads fresh bundle metadata and checks its checksum against the release files. To check a proposed tag and checksum asset too, run `python scripts/check_release.py --release-tag v0.20.0 --checksums SHA256SUMS.txt` after the Gradle check. Catalog evidence is bound to the exact bundle hash.
+Before publishing, synchronize the release version, source index, changelog and README checksum, then run `:patches:verifyReleaseMetadata`. This loads fresh bundle metadata and checks its checksum against the release files. To check a proposed tag and checksum asset too, run `python scripts/check_release.py --release-tag v0.20.1 --checksums SHA256SUMS.txt` after the Gradle check. Catalog evidence is bound to the exact bundle hash.
 
 ### Check the bundle
 
-The [v0.20.0 release](https://github.com/HOANGGLEEE/Messenger1/releases/tag/v0.20.0) includes the `.mpp` bundle. Compare its hash with a locally built artifact when publishing or installing a release.
+The [v0.20.1 release](https://github.com/HOANGGLEEE/Messenger1/releases/tag/v0.20.1) includes the `.mpp` bundle. Compare its hash with a locally built artifact when publishing or installing a release.
 
 ```text
-Generate the current checksum with `Get-FileHash -Algorithm SHA256 patches/build/libs/patches-0.20.0.mpp`.
+Generate the current checksum with `Get-FileHash -Algorithm SHA256 patches/build/libs/patches-0.20.1.mpp`.
 ```
 
 Morphe Manager and Desktop do not verify detached patch-bundle signatures automatically. Publish checksums beside each release and verify downloaded artifacts before use.

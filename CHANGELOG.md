@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Development build 0.20.0. The public release remains 0.14.0.
+Current release: 0.20.1.
 
 - Theme return hooks keep incoming branches attached to the color helper. Menu binding rejects reused holder registers before making changes, and the story Save helper is retained even when the patcher has already cached direct methods.
 
