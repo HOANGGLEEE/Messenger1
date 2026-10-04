@@ -279,15 +279,22 @@ public final class Settings {
      * Phase 1 exposes this bridge without guessing an obfuscated hook. It is intentionally a no-op while
      * Keep unsent messages is off, paused or in safe mode.
      */
-    public static void captureIncomingMessage(String messageId, String text) {
+    public static void captureIncomingMessage(String messageId, String threadId, String senderId,
+            String text, long messageTimestamp) {
         if (messageId == null || messageId.isEmpty() || text == null || text.isEmpty() || !wouldUse("keep_unsent")) return;
         Context context = appContext;
         if (context == null) return;
         try {
-            AntiUnsendStore.get(context).captureText(messageId, text, System.currentTimeMillis());
+            AntiUnsendStore.get(context).captureText(
+                messageId, threadId, senderId, text, messageTimestamp, System.currentTimeMillis());
         } catch (RuntimeException error) {
             hookFailedPrivately("keep_unsent", "Can't cache incoming message text", error);
         }
+    }
+
+    /** Render-path fallback until a verified receive/persist hook can provide sender/thread metadata. */
+    public static void captureIncomingMessage(String messageId, String text) {
+        captureIncomingMessage(messageId, null, null, text, 0);
     }
 
     public static synchronized void recordUnsent(String messageId) {
