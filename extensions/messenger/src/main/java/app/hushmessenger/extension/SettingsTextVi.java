@@ -217,7 +217,7 @@ final class SettingsTextVi {
         {"hide_read_receipts.title", "Ẩn trạng thái đã xem"},
         {"hide_read_receipts.description", "Ngừng gửi xác nhận đã xem. Đoạn chat mã hóa đã mở có thể vẫn được đánh dấu chưa đọc trên điện thoại này. Việc trả lời hoặc tắt chức năng có thể thông báo cho người gửi. Phạm vi hỗ trợ nhóm chưa được xác minh."},
         {"keep_unsent.title", "Giữ lại tin nhắn đã thu hồi"},
-        {"keep_unsent.description", "Chỉ giữ tin nhắn trên các luồng thu hồi kiểu cũ đã được xác minh. Đoạn chat mã hóa đầu cuối hiện chưa được hỗ trợ và phạm vi hỗ trợ chat nhóm chưa được xác minh đầy đủ. Nhật ký hoạt động chỉ ghi nhận lần chặn thu hồi kiểu cũ, không xác nhận đoạn chat được hỗ trợ. Khả năng giữ lại tin nhắn do chính bạn thu hồi có thể bị hạn chế."},
+        {"keep_unsent.description", "Giữ tin nhắn trên các luồng thu hồi kiểu cũ đã được xác minh và ghi các lần thu hồi bắt được vào lịch sử riêng trên thiết bị. Nội dung văn bản được khôi phục khi HushMessenger đã kịp lưu trước lúc thu hồi. Hỗ trợ chat mã hóa đầu cuối và tin nhắn chưa mở hiện chưa được xác minh."},
         {"anonymous_stories.title", "Xem story mà không hiện danh tính"},
         {"anonymous_stories.description", "Mở story của người khác mà không thêm bạn vào danh sách người xem. Story được mở theo cách này vẫn được đánh dấu là đã xem ở phía bạn."},
         {"save_stories.title", "Lưu story của người khác"},
