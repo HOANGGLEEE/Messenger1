@@ -271,10 +271,10 @@ object DexScanner {
 
                 if (score < 6 || (!has(identity) && !has(content))) continue
                 shown++
-                println("  SCORE $score: \${method.id()}")
-                println("    Class: \${cls.type}")
-                println("    Redex: \${cls.redexName() ?: "(none)"}")
-                println("    Params: \${method.parameterTypes}")
+                println("  SCORE $score: ${method.id()}")
+                println("    Class: ${cls.type}")
+                println("    Redex: ${cls.redexName() ?: "(none)"}")
+                println("    Params: ${method.parameterTypes}")
                 val matchedStrings = strings.filter { value ->
                     (identity + content + context + persistence).any { value.contains(it, ignoreCase = true) }
                 }.distinct().take(16)
