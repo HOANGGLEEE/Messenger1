@@ -326,7 +326,11 @@ public final class Settings {
     }
 
     public static String labelKeptUnsent(String text, String messageId) {
-        if (!wouldUse("keep_unsent") || !isKeptUnsent(messageId)) return text;
+        if (!wouldUse("keep_unsent")) return text;
+        // This getter is a verified place where Messenger exposes plaintext. It preserves already-rendered messages
+        // immediately; unseen-message coverage still requires a separately verified receive/persist hook.
+        if (text != null && !text.isEmpty()) captureIncomingMessage(messageId, text);
+        if (!isKeptUnsent(messageId)) return text;
         String original = text;
         if (original == null || original.isEmpty()) original = cachedUnsentText(messageId);
         return original == null || original.isEmpty() ? text : "[unsent] " + original;
