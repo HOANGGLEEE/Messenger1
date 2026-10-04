@@ -127,6 +127,7 @@ class ControlLifecycleTest {
         }
         assertEquals(1, count("provider", "app.hushmessenger.extension.SettingsProvider"), selection.name)
         assertEquals(1, count("activity", "app.hushmessenger.extension.SettingsActivity"), selection.name)
+        assertEquals(1, count("activity", "app.hushmessenger.extension.UnsentHistoryActivity"), selection.name)
         assertEquals(1, count("activity", "app.hushmessenger.extension.RestartActivity"), selection.name)
         assertEquals(1, count("activity-alias", "app.hushmessenger.extension.SettingsLauncher"), selection.name)
     }
