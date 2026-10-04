@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 RELEASE_SIGNERS = Path("scripts/release_signers")
-RELEASE_SIGNER = "SysAdminDoc"
+RELEASE_SIGNER = "HOANGGLEEE"
 SIGNATURE_NAMESPACE = "hushmessenger-release"
 KEY_TYPES = ("ssh-ed25519", "ssh-rsa", "ecdsa-sha2-")
 CATALOG_TIMEOUT = 600
@@ -90,7 +90,7 @@ def verify(root, bundle=None, evidence=None, release_tag=None, checksums=None):
     require(index.get("version") == version, "Source index version differs from source")
     require(
         index.get("download_url")
-        == f"https://github.com/SysAdminDoc/HushMessenger/releases/download/v{version}/{filename}",
+        == f"https://github.com/HOANGGLEEE/Messenger1/releases/download/v{version}/{filename}",
         "Source download URL differs from release version or artifact name",
     )
     timestamp = index.get("created_at", "")
@@ -150,7 +150,7 @@ def verify(root, bundle=None, evidence=None, release_tag=None, checksums=None):
     # Only this repository's release links (absolute in any case, or relative) and
     # its own bundle names; another project's release or bundle is not ours to pin.
     release_links = re.compile(
-        r"(?i)(?:SysAdminDoc/HushMessenger/|\.\./)releases/(?:tag|download)/v"
+        r"(?i)(?:HOANGGLEEE/Messenger1/|\.\./)releases/(?:tag|download)/v"
         r"(\d+\.\d+\.\d+)(?!\.?\d)"
         r"|(?<![\w.-])patches-(\d+\.\d+\.\d+)(?!\.?\d)"
     )
@@ -283,7 +283,7 @@ def verify_development(root, bundle, evidence, held_index_sha256, checksums=None
     )
     require(
         index.get("download_url")
-        == f"https://github.com/SysAdminDoc/HushMessenger/releases/download/v{public_version}/patches-{public_version}.mpp",
+        == f"https://github.com/HOANGGLEEE/Messenger1/releases/download/v{public_version}/patches-{public_version}.mpp",
         "Invalid held download URL",
     )
     # The operator's hash only pins the file it was taken from; the tag pins what was published.

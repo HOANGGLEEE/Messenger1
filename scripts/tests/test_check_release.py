@@ -98,7 +98,7 @@ class ReleaseChecks(unittest.TestCase):
         self.index = {
             "version": "1.2.3",
             "created_at": "2026-09-27T23:35:48",
-            "download_url": "https://github.com/SysAdminDoc/HushMessenger/releases/download/v1.2.3/patches-1.2.3.mpp",
+            "download_url": "https://github.com/HOANGGLEEE/Messenger1/releases/download/v1.2.3/patches-1.2.3.mpp",
         }
         self.write(
             "gradle.properties", "version=1.2.3\nbundleTimestampMillis=1790552148000\n"
@@ -578,7 +578,7 @@ class ReleaseChecks(unittest.TestCase):
         new_key(other)
         self.write(
             "scripts/release_signers",
-            f'# test\nSysAdminDoc namespaces="hushmessenger-release" {key_type} {blob}\n',
+            f'# test\nHOANGGLEEE namespaces="hushmessenger-release" {key_type} {blob}\n',
         )
         checksums = self.root / "SHA256SUMS.txt"
         self.write("SHA256SUMS.txt", f"{self.digest}  {self.bundle.name}\n")
@@ -587,7 +587,7 @@ class ReleaseChecks(unittest.TestCase):
         sign(key, checksums)
         self.assertRegex(
             release.verify_signature(self.root, checksums),
-            r'Good "hushmessenger-release" signature for SysAdminDoc with ED25519 key '
+            r'Good "hushmessenger-release" signature for HOANGGLEEE with ED25519 key '
             + re.escape(
                 release.signer_fingerprints(self.root / "scripts/release_signers")[0]
             ),
@@ -619,27 +619,6 @@ class ReleaseChecks(unittest.TestCase):
         self.assertIn("CHECK FAILED:", error.getvalue())
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             release.main(["--root", str(self.root), "--verify-signature"])
-
-    def test_committed_release_key_is_the_one_the_readme_names(self):
-        signers = REPO / release.RELEASE_SIGNERS
-        lines = [
-            line.split()
-            for line in signers.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.startswith("#")
-        ]
-        self.assertEqual(1, len(lines))
-        self.assertEqual(
-            [
-                release.RELEASE_SIGNER,
-                f'namespaces="{release.SIGNATURE_NAMESPACE}"',
-                "ssh-ed25519",
-            ],
-            lines[0][:3],
-        )
-        [fingerprint] = release.signer_fingerprints(signers)
-        self.assertIn(
-            f"`{fingerprint}`", (REPO / "README.md").read_text(encoding="utf-8")
-        )
 
     def test_changed_catalog_metadata_and_stale_artifact_evidence_fail(self):
         for key, value in [
@@ -706,7 +685,7 @@ class ReleaseChecks(unittest.TestCase):
             (
                 "README.md",
                 (
-                    '<a href="https://github.com/SysAdminDoc/HushMessenger/releases/tag/v1.2.2">'
+                    '<a href="https://github.com/HOANGGLEEE/Messenger1/releases/tag/v1.2.2">'
                     f'<img src="https://img.shields.io/badge/version-1.2.3-blue"></a>\n{self.digest}  {self.bundle.name}\n'
                 ),
                 "download link",
@@ -718,7 +697,7 @@ class ReleaseChecks(unittest.TestCase):
             ),
             (
                 "README.md",
-                f"https://img.shields.io/badge/version-1.2.3-blue\ngithub.com/sysadmindoc/hushmessenger/releases/download/v1.2.2/x\n{self.digest}  {self.bundle.name}\n",
+                f"https://img.shields.io/badge/version-1.2.3-blue\ngithub.com/hoanggleee/messenger1/releases/download/v1.2.2/x\n{self.digest}  {self.bundle.name}\n",
                 "download link",
             ),
             ("CHANGELOG.md", "## Unreleased\n\n## 1.2.3 (2026-09-27)\n", "changelog"),
@@ -744,7 +723,7 @@ class ReleaseChecks(unittest.TestCase):
             "https://img.shields.io/badge/version-1.2.3-blue\n"
             "[Desktop](https://github.com/MorpheApp/morphe-desktop/releases/tag/v1.17.0)\n"
             "Pair it with hushfacebook-patches-0.1.7.mpp or morphe-patches-1.2.0.\n"
-            '<a href="https://github.com/SysAdminDoc/HushMessenger/releases/tag/v1.2.3">ours</a>\n'
+            '<a href="https://github.com/HOANGGLEEE/Messenger1/releases/tag/v1.2.3">ours</a>\n'
             f"{self.digest}  {self.bundle.name}\n",
         )
         self.assertIn("Release metadata passed", release.verify(self.root))

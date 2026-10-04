@@ -28,7 +28,7 @@ import static org.junit.Assert.*;
 @Config(sdk = {28, 35, 36})
 public class UpdateCheckTest {
     private static final String DEFAULT_URL = SettingsActivity.releasesUrl;
-    private static final String RELEASE_PAGE = "https://github.com/SysAdminDoc/HushMessenger/releases/tag/v99.0.0";
+    private static final String RELEASE_PAGE = "https://github.com/HOANGGLEEE/Messenger1/releases/tag/v99.0.0";
 
     private interface Reply { void send(OutputStream out) throws IOException; }
 
@@ -88,13 +88,13 @@ public class UpdateCheckTest {
     @Test public void onlyThisProjectsReleasePagesAreOffered() {
         assertEquals(RELEASE_PAGE, SettingsActivity.releasePage(RELEASE_PAGE));
         assertEquals("", SettingsActivity.releasePage("https://github.com/someone/else/releases/tag/v99.0.0"));
-        assertEquals("", SettingsActivity.releasePage("https://github.com/SysAdminDoc/HushMessenger.evil/releases/x"));
-        assertEquals("", SettingsActivity.releasePage("http://github.com/SysAdminDoc/HushMessenger/releases/tag/v1"));
-        assertEquals("", SettingsActivity.releasePage("https://github.com/SysAdminDoc/HushMessenger/releases/../../../evil/x"));
-        assertEquals("", SettingsActivity.releasePage("https://github.com/SysAdminDoc/HushMessenger/releases/tag/%2e%2e/x"));
-        assertEquals("", SettingsActivity.releasePage("https://github.com/SysAdminDoc/HushMessenger/releases/tag/.."));
-        assertEquals("", SettingsActivity.releasePage("https://github.com/SysAdminDoc/HushMessenger/releases/tag/v1?x=https://evil"));
-        assertEquals("", SettingsActivity.releasePage("https://github.com.evil/SysAdminDoc/HushMessenger/releases/tag/v1"));
+        assertEquals("", SettingsActivity.releasePage("https://github.com/HOANGGLEEE/Messenger1.evil/releases/x"));
+        assertEquals("", SettingsActivity.releasePage("http://github.com/HOANGGLEEE/Messenger1/releases/tag/v1"));
+        assertEquals("", SettingsActivity.releasePage("https://github.com/HOANGGLEEE/Messenger1/releases/../../../evil/x"));
+        assertEquals("", SettingsActivity.releasePage("https://github.com/HOANGGLEEE/Messenger1/releases/tag/%2e%2e/x"));
+        assertEquals("", SettingsActivity.releasePage("https://github.com/HOANGGLEEE/Messenger1/releases/tag/.."));
+        assertEquals("", SettingsActivity.releasePage("https://github.com/HOANGGLEEE/Messenger1/releases/tag/v1?x=https://evil"));
+        assertEquals("", SettingsActivity.releasePage("https://github.com.evil/HOANGGLEEE/Messenger1/releases/tag/v1"));
         assertEquals("", SettingsActivity.releasePage(""));
     }
 
@@ -602,7 +602,7 @@ public class UpdateCheckTest {
         } finally { RuntimeEnvironment.setFontScale(1f); }
     }
 
-    private static String page(String tag) { return "https://github.com/SysAdminDoc/HushMessenger/releases/tag/" + tag; }
+    private static String page(String tag) { return "https://github.com/HOANGGLEEE/Messenger1/releases/tag/" + tag; }
     private String cache(String etag, long time) { return "1\n" + SettingsActivity.releasesUrl + "\nv99.0.0\n" + RELEASE_PAGE + "\n" + etag + "\n" + time; }
 
     private static TextView awaitStatus(View root) throws InterruptedException {
@@ -618,7 +618,7 @@ public class UpdateCheckTest {
     }
 
     private static String release(String tag, String page) {
-        return "{\"html_url\":\"" + page + "\",\"tag_name\":\"" + tag + "\",\"author\":{\"html_url\":\"https://github.com/SysAdminDoc\"}}";
+        return "{\"html_url\":\"" + page + "\",\"tag_name\":\"" + tag + "\",\"author\":{\"html_url\":\"https://github.com/HOANGGLEEE\"}}";
     }
 
     /** Reads the request headers, then lets the test's reply answer, and closes the connection. */

@@ -1,6 +1,6 @@
 /*
  * Adapted from Hushfacebook's SharedPermissions.kt at
- * https://github.com/SysAdminDoc/Hushfacebook/blob/15b8e9ed9315464a3e2d1a821b4e26ad47bbc28c/patches/src/main/kotlin/app/morphe/patches/facebook/coexist/SharedPermissions.kt
+ * Adapted from Hushfacebook's shared-permission patch; see NOTICE for provenance.
  * Copyright 2026 Hushfacebook contributors. GPL-3.0.
  */
 package app.hushmessenger.patches.coexist

@@ -830,7 +830,7 @@ public final class SettingsActivity extends Activity {
         Button source = ui.button(text.get("source"));
         source.setTag("source_licenses");
         source.setOnClickListener(view -> {
-            try { startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/SysAdminDoc/HushMessenger#research-and-credits"))); }
+            try { startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/HOANGGLEEE/Messenger1"))); }
             catch (android.content.ActivityNotFoundException error) { feedback(text.get("no_browser"), Toast.LENGTH_LONG); }
         });
         ui.add(content, source, 16);
@@ -890,7 +890,7 @@ public final class SettingsActivity extends Activity {
     }
 
     /** Where the update check asks, and how long it waits. Tests point these at a local server. */
-    static String releasesUrl = "https://api.github.com/repos/SysAdminDoc/HushMessenger/releases/latest";
+    static String releasesUrl = "https://api.github.com/repos/HOANGGLEEE/Messenger1/releases/latest";
     static int updateTimeoutMillis = 5000;
     static java.util.function.LongSupplier updateClock = System::currentTimeMillis;
     private static final Object UPDATE_CACHE_LOCK = new Object();
@@ -927,13 +927,13 @@ public final class SettingsActivity extends Activity {
     /** The release page to offer, or "" when the response points anywhere but this project's releases. */
     static String releasePage(String htmlUrl) {
         // A plain tag page only, so "../" or an encoded path can't walk out of this project.
-        return htmlUrl.matches("https://github\\.com/SysAdminDoc/HushMessenger/releases/tag/[0-9A-Za-z._+-]+")
+        return htmlUrl.matches("https://github\\.com/HOANGGLEEE/Messenger1/releases/tag/[0-9A-Za-z._+-]+")
             && !htmlUrl.contains("..") ? htmlUrl : "";
     }
 
     static String releasePage(String htmlUrl, String tag) {
         return ReleaseCheck.validTag(tag) && !releasePage(htmlUrl).isEmpty()
-            && htmlUrl.equals("https://github.com/SysAdminDoc/HushMessenger/releases/tag/" + tag) ? htmlUrl : "";
+            && htmlUrl.equals("https://github.com/HOANGGLEEE/Messenger1/releases/tag/" + tag) ? htmlUrl : "";
     }
 
     private void syncUpdateChoice(boolean check) {

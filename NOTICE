@@ -8,6 +8,11 @@ including its ReVanced contributions, and rushiranpise/morphe-patches
 The bubble eligibility anchor originates from NeonOrbit/ChatHeadEnabler.
 The runtime settings and checked 580 integrations are HushMessenger changes.
 
+This repository is maintained by HOANGGLEEE as a modified fork. HOANGGLEEE
+does not claim sole authorship of inherited code. The shared-permission
+approach was adapted from Hushfacebook by SysAdminDoc; that provenance is
+retained here as historical attribution, not as a runtime or project link.
+
 7c. Project Name Restriction
 ----------------------------
 

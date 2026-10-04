@@ -1,16 +1,16 @@
 import org.apache.tools.ant.filters.FixCrLfFilter
 import org.gradle.jvm.tasks.Jar
 
-group = "com.sysadmindoc.hushmessenger"
+group = "com.hoanggleee.messenger1"
 
 patches {
     about {
         name = "HushMessenger"
         description = "Messenger patches with exact-version compatibility checks."
-        source = "https://github.com/SysAdminDoc/HushMessenger"
-        author = "SysAdminDoc"
-        contact = "https://github.com/SysAdminDoc/HushMessenger/issues"
-        website = "https://github.com/SysAdminDoc/HushMessenger"
+        source = "https://github.com/HOANGGLEEE/Messenger1"
+        author = "HOANGGLEEE"
+        contact = "https://github.com/HOANGGLEEE/Messenger1/issues"
+        website = "https://github.com/HOANGGLEEE/Messenger1"
         license = "GPLv3"
     }
 }

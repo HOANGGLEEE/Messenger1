@@ -480,7 +480,7 @@ class PatchHeapChecks(unittest.TestCase):
                     json.dumps(
                         {
                             "version": "1.2.2",
-                            "download_url": "https://github.com/SysAdminDoc/HushMessenger/releases/download/v1.2.2/patches-1.2.2.mpp",
+                            "download_url": "https://github.com/HOANGGLEEE/Messenger1/releases/download/v1.2.2/patches-1.2.2.mpp",
                         }
                     )
                 )
