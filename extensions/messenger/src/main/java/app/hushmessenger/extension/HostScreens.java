@@ -20,6 +20,7 @@ import java.util.List;
 public final class HostScreens {
     static final String EXTRA = "app.hushmessenger.screen";
     static final String SETTINGS = "settings";
+    static final String HISTORY = "history";
     static final String RESTART = "restart";
     /** Plain stock activity the screens run in: not exported, with no theme, task affinity or launch mode of its own. */
     static final String SCREEN_HOST = "com.facebook.messaging.about.preference.NeueAboutPreferenceActivity";
@@ -59,9 +60,11 @@ public final class HostScreens {
             // own Parcelables on Android 12 and older.
             intent.setExtrasClassLoader(HostScreens.class.getClassLoader());
             String screen = intent.getStringExtra(EXTRA);
-            if (!SETTINGS.equals(screen) && !RESTART.equals(screen)) return null;
+            if (!SETTINGS.equals(screen) && !HISTORY.equals(screen) && !RESTART.equals(screen)) return null;
             if (SHORTCUT_HOST.equals(className)) return new ShortcutTrampoline();
-            return SETTINGS.equals(screen) ? new SettingsActivity() : new RestartActivity();
+            if (SETTINGS.equals(screen)) return new SettingsActivity();
+            if (HISTORY.equals(screen)) return new UnsentHistoryActivity();
+            return new RestartActivity();
         } catch (RuntimeException error) {
             Log.e("HushMessenger", "Can't open a HushMessenger screen", error);
             return null;
@@ -161,14 +164,15 @@ public final class HostScreens {
     /** The installed screen when PackageManager knows it, otherwise the same screen inside the stock host. */
     static Intent intentFor(Context context, String screen) {
         boolean settings = SETTINGS.equals(screen);
-        Intent intent = new Intent().setClassName(context.getPackageName(),
-            (settings ? SettingsActivity.class : RestartActivity.class).getName());
+        Class<?> target = settings ? SettingsActivity.class :
+            HISTORY.equals(screen) ? UnsentHistoryActivity.class : RestartActivity.class;
+        Intent intent = new Intent().setClassName(context.getPackageName(), target.getName());
         if (hosted(context)) {
             intent = new Intent().setClassName(context.getPackageName(), SCREEN_HOST).putExtra(EXTRA, screen);
-            // The host shares Messenger's task affinity; a document task keeps settings apart like the real one.
+            // The host shares Messenger's task affinity; a document task keeps top-level settings apart like the real one.
             if (settings) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
         }
-        // Settings always get their own task, as the real activity's task affinity gives them.
+        // Top-level settings always get their own task. Other screens follow their caller unless opened outside an Activity.
         if (settings || !(context instanceof Activity)) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         return intent;
     }
