@@ -1213,7 +1213,6 @@ internal fun MutableMethod.injectKeepUnsent() {
         invoke-virtual {p1, v0}, Landroid/content/Intent;->getStringExtra(Ljava/lang/String;)Ljava/lang/String;
         move-result-object v0
         invoke-static {v0}, $SETTINGS->recordUnsent(Ljava/lang/String;)V
-        return-void
     """.trimIndent(), ExternalLabel("stock_behavior", getInstruction(0)))
 }
 
