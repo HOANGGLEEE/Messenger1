@@ -273,6 +273,36 @@ public final class Settings {
     }
 
     private static final String KEPT_UNSENT_KEY = "kept_unsent_ids";
+    private static final String UNSENT_CAPTURE_HITS = "unsent_capture_hits";
+    private static final String UNSENT_CAPTURE_SAVED = "unsent_capture_saved";
+    private static final String UNSENT_REVOKE_HITS = "unsent_revoke_hits";
+    private static final String UNSENT_REVOKE_SAVED = "unsent_revoke_saved";
+
+    private static synchronized void incrementUnsentCounter(String key) {
+        SharedPreferences prefs = preferences;
+        if (prefs == null) return;
+        prefs.edit().putLong(key, prefs.getLong(key, 0) + 1).apply();
+    }
+
+    static long unsentCaptureHits() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_CAPTURE_HITS, 0);
+    }
+
+    static long unsentCaptureSaved() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_CAPTURE_SAVED, 0);
+    }
+
+    static long unsentRevokeHits() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_REVOKE_HITS, 0);
+    }
+
+    static long unsentRevokeSaved() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_REVOKE_SAVED, 0);
+    }
 
     /**
      * Capture a plaintext snapshot as soon as a verified Messenger receive/persist hook can provide one.
@@ -282,11 +312,13 @@ public final class Settings {
     public static void captureIncomingMessage(String messageId, String threadId, String senderId,
             String text, long messageTimestamp) {
         if (messageId == null || messageId.isEmpty() || text == null || text.isEmpty() || !wouldUse("keep_unsent")) return;
+        incrementUnsentCounter(UNSENT_CAPTURE_HITS);
         Context context = appContext;
         if (context == null) return;
         try {
             AntiUnsendStore.get(context).captureText(
                 messageId, threadId, senderId, text, messageTimestamp, System.currentTimeMillis());
+            incrementUnsentCounter(UNSENT_CAPTURE_SAVED);
         } catch (RuntimeException error) {
             hookFailedPrivately("keep_unsent", "Can't cache incoming message text", error);
         }
@@ -299,6 +331,7 @@ public final class Settings {
 
     public static synchronized void recordUnsent(String messageId) {
         if (messageId == null || messageId.isEmpty() || !wouldUse("keep_unsent")) return;
+        incrementUnsentCounter(UNSENT_REVOKE_HITS);
         SharedPreferences prefs = preferences;
         if (prefs == null) return;
         Set<String> ids = new HashSet<>(prefs.getStringSet(KEPT_UNSENT_KEY, Collections.emptySet()));
@@ -306,6 +339,7 @@ public final class Settings {
         Context context = appContext;
         if (context != null) try {
             AntiUnsendStore.get(context).markUnsent(messageId, System.currentTimeMillis());
+            incrementUnsentCounter(UNSENT_REVOKE_SAVED);
         } catch (RuntimeException error) {
             // The legacy SharedPreferences marker remains the fallback; database failure must never crash Messenger.
             hookFailedPrivately("keep_unsent", "Can't record unsent message history", error);
