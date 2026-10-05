@@ -122,8 +122,9 @@ public class SettingsTest {
             String spoken = choice.getContentDescription().toString();
             assertTrue(spoken.contains("legacy unsend routes"));
             assertTrue(spoken.contains("private local history"));
-            assertTrue(spoken.contains("captured it before the revoke"));
-            assertTrue(spoken.contains("unseen-message receive coverage are not yet verified"));
+            assertTrue(spoken.contains("decrypted E2EE text is cached before the delete delta"));
+            assertTrue(spoken.contains("messages you have not opened yet"));
+            assertTrue(spoken.contains("media attachments"));
             assertEquals("No unsend activity observed since restart",
                 ((android.widget.TextView) root.findViewWithTag("active_keep_unsent")).getText().toString());
         }
