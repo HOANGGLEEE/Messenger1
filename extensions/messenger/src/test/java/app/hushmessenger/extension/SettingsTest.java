@@ -66,27 +66,33 @@ public class SettingsTest {
         assertTrue(Settings.hideStories());
     }
 
-    @Test @Config(sdk = {28, 36}) public void legacyUnsendHelpersRetainAndLabelOnlyRecordedMessages() {
+    @Test @Config(sdk = {28, 36}) public void legacyUnsendHelpersRecordHistoryWithoutChangingMessengerState() {
         Settings.activeAt.clear();
         Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
         assertTrue(Settings.keepUnsent());
         assertEquals("Eligibility is not an interception", 0, Settings.lastActive("keep_unsent"));
+
+        // The render hook may cache plaintext for local history, but it must return Messenger's value unchanged.
         assertEquals("ordinary text", Settings.labelKeptUnsent("ordinary text", "other-message"));
         assertTrue(Settings.suppressUnsent(true, "other-message"));
+        assertFalse(Settings.suppressUnsent(false, "other-message"));
         assertEquals("Ordinary message reads are not interceptions", 0, Settings.lastActive("keep_unsent"));
+
         Settings.recordUnsent("retained-message");
         assertTrue(Settings.lastActive("keep_unsent") > 0);
         Settings.recordUnsent(null);
         Settings.recordUnsent("");
-        assertEquals(java.util.Set.of("retained-message"), Settings.preferences.getStringSet("kept_unsent_ids", java.util.Set.of()));
+        assertEquals(java.util.Set.of("retained-message"),
+            Settings.preferences.getStringSet("kept_unsent_ids", java.util.Set.of()));
         assertTrue(Settings.isKeptUnsent("retained-message"));
         assertFalse(Settings.isKeptUnsent(null));
-        assertEquals("[unsent] original text", Settings.labelKeptUnsent("original text", "retained-message"));
-        assertEquals("ordinary text", Settings.labelKeptUnsent("ordinary text", "other-message"));
-        assertEquals("[unsent] original text", Settings.labelKeptUnsent(null, "retained-message"));
-        assertFalse(Settings.suppressUnsent(true, "retained-message"));
+
+        // A recorded revoke changes only the local archive. Messenger's text and unsent flag stay stock.
+        assertEquals("original text", Settings.labelKeptUnsent("original text", "retained-message"));
+        assertNull(Settings.labelKeptUnsent(null, "retained-message"));
+        assertTrue(Settings.suppressUnsent(true, "retained-message"));
         assertFalse(Settings.suppressUnsent(false, "retained-message"));
-        assertTrue(Settings.suppressUnsent(true, "other-message"));
+
         for (String disabled : new String[] {"paused", "keep_unsent"}) {
             Settings.preferences.edit().putBoolean(disabled, "paused".equals(disabled)).commit();
             assertFalse(Settings.keepUnsent());
@@ -106,7 +112,7 @@ public class SettingsTest {
         assertEquals(2, AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listUnsent(10).size());
     }
 
-    @Test @Config(sdk = {28, 36}) public void retainedUnsendChoiceSurvivesRestartWithoutClaimingChatCoverage() {
+    @Test @Config(sdk = {28, 36}) public void retainedUnsendChoiceSurvivesRestartWithoutChangingStockUnsend() {
         Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
         Settings.recordUnsent("retained-message");
         Settings.preferences = null;
@@ -120,16 +126,16 @@ public class SettingsTest {
             Switch choice = root.findViewWithTag("keep_unsent");
             assertTrue(choice.isChecked());
             String spoken = choice.getContentDescription().toString();
-            assertTrue(spoken.contains("legacy unsend routes"));
-            assertTrue(spoken.contains("private local history"));
-            assertTrue(spoken.contains("decrypted E2EE text is cached before the delete delta"));
-            assertTrue(spoken.contains("messages you have not opened yet"));
+            assertTrue(spoken.contains("private local text snapshot"));
+            assertTrue(spoken.contains("Messenger's own unsend behavior is left unchanged"));
+            assertTrue(spoken.contains("verified E2EE receive/revoke path"));
             assertTrue(spoken.contains("media attachments"));
             assertEquals("No unsend activity observed since restart",
                 ((android.widget.TextView) root.findViewWithTag("active_keep_unsent")).getText().toString());
         }
-        assertEquals("[unsent] original text", Settings.labelKeptUnsent("original text", "retained-message"));
-        assertFalse(Settings.suppressUnsent(true, "retained-message"));
+        assertEquals("original text", Settings.labelKeptUnsent("original text", "retained-message"));
+        assertTrue(Settings.suppressUnsent(true, "retained-message"));
+        assertFalse(Settings.suppressUnsent(false, "retained-message"));
         assertEquals("Reading an old retained message is not a new interception", 0, Settings.lastActive("keep_unsent"));
     }
 
@@ -173,8 +179,8 @@ public class SettingsTest {
         Settings.preferences = reloaded;
         assertEquals(expected, reloaded.getStringSet("kept_unsent_ids", java.util.Set.of()));
         assertTrue(reloaded.getBoolean("keep_unsent", false));
-        assertFalse(Settings.suppressUnsent(true, "from-old-version"));
-        assertEquals("[unsent] text", Settings.labelKeptUnsent("text", "message-99"));
+        assertTrue(Settings.suppressUnsent(true, "from-old-version"));
+        assertEquals("text", Settings.labelKeptUnsent("text", "message-99"));
     }
 
     @Test @Config(sdk = {28, 36}) public void inactiveUnsendCallsAddNothingAndKeepStockBehavior() {
@@ -193,11 +199,11 @@ public class SettingsTest {
         }
     }
 
-    @Test @Config(sdk = {28, 36}) public void renderedTextBecomesTheFallbackForAnUnsentMessage() {
+    @Test @Config(sdk = {28, 36}) public void renderedTextIsCachedForHistoryWithoutBeingRestoredIntoMessenger() {
         Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
         assertEquals("cached before revoke", Settings.labelKeptUnsent("cached before revoke", "cached-message"));
         Settings.recordUnsent("cached-message");
-        assertEquals("[unsent] cached before revoke", Settings.labelKeptUnsent(null, "cached-message"));
+        assertNull(Settings.labelKeptUnsent(null, "cached-message"));
         assertEquals("cached before revoke", Settings.cachedUnsentText("cached-message"));
         assertEquals(1, AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listUnsent(10).size());
     }
