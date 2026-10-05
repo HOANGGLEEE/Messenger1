@@ -144,7 +144,7 @@ final class SettingsTextVi {
         {"unsent_history_unknown_sender", "Chưa xác định người gửi"},
         {"unsent_history_sender", "Người gửi: %s"},
         {"unsent_history_received_at", "Nhận lúc %s"},
-        {"unsent_history_unsent_at", "Thu hồi lúc %s"},
+        {"unsent_history_unsent_at", "Đã thu hồi lúc %s"},
         {"error_now", "Vừa dừng do lỗi"},
         {"error_ago", "Đã dừng do lỗi cách đây %s"},
         {"changes_paused", "Đã tạm dừng các thay đổi"},
