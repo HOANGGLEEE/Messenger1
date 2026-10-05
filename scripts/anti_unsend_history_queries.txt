@@ -1,8 +1,13 @@
-# Anti-Unsend V2 / history: trace the message object materialized by getMessageRange.
+# Anti-Unsend V2 / history: trace a plaintext message from MPS/live E2EE into MDCore.
 # Run with:
 #   .\gradlew.bat :patches:inspectDex -PapkPath="<same-stock-messenger-apk>" -Ptarget="@scripts/anti_unsend_history_queries.txt" --no-daemon
 #
-# The goal is to identify the semantics of TmZ getters and the 88M result object
+# Evidence from the previous scans:
+# - VNl.A01 reads MPS message_id/timestamp and parses MessageApplication.
+# - V7D.A00 is shared by MPS parsing, E2EE delta parsing, and stored-blob parsing.
+# - MDCoreAuthoritativeStore persists serialized TmZ messages.
+#
+# This batch resolves the remaining field/getter semantics and the live-delta/store call sites
 # before wiring Settings.captureIncomingMessage(...) into a runtime hook.
 
 class:LX/TmZ;
@@ -16,6 +21,21 @@ callers:LX/TS6;->A0c
 
 class:LX/88M;
 callers:LX/88M;-><init>
+
+class:LX/VNn;
+method:LX/VNn;->A01
+callers:LX/VNn;->A01
+
+class:LX/TnQ;
+callers:LX/V7D;->A00
+
+class:Lcom/facebook/xapp/mdcore/persistence/impl/MDCoreAuthoritativeStoreImpl;
+method:Lcom/facebook/xapp/mdcore/persistence/impl/MDCoreAuthoritativeStoreImpl;->DYh
+callers:Lcom/facebook/xapp/mdcore/persistence/impl/MDCoreAuthoritativeStoreImpl;->DYh
+
+class:LX/40D;
+method:LX/40D;->invoke
+callers:LX/40D;->invoke
 
 class:Lcom/facebook/messaging/modularsync/networkfetcher/mps/loader/MPSMessageLoader;
 method:Lcom/facebook/messaging/modularsync/networkfetcher/mps/loader/MPSMessageLoader;->A06
