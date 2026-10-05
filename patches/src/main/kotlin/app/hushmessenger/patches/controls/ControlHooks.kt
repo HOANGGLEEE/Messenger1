@@ -1088,6 +1088,92 @@ internal fun MutableMethod.injectMenuFolderClick(folderItemType: String) {
     """.trimIndent())
 }
 
+private const val E2EE_DELTA = "Lcom/facebook/messaging/modularsync/models/delta/E2EEDelta;"
+private const val E2EE_DELETE_DELTA = "Lcom/facebook/messaging/modularsync/models/delta/ClientDelta\$DeleteMessageClientDelta;"
+private const val E2EE_DELETE_IDS = "$E2EE_DELETE_DELTA->A02:Ljava/util/List;"
+private const val E2EE_TEXT_CONTENT =
+    "Lcom/facebook/xapp/messaging/modularsync/message/models/protobuf/AppMessageModelFragmentProto\$AppMessageContentFBMessageTextContent;"
+
+/**
+ * Messenger 580 variant 346013370 builds a plaintext TmZ here after its E2EE payload has already been decrypted.
+ * The exact shape is pinned because the helper classes below are obfuscated and must never be guessed on another build.
+ */
+internal fun MutableMethod.validateE2eeIncomingCapture(): Int {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: E2EE incoming hook has no code")
+    val strings = code.mapNotNull { ((it as? ReferenceInstruction)?.reference as? StringReference)?.string }.toSet()
+    val returnIndex = code.indexOfLast { it.opcode == Opcode.RETURN_OBJECT }
+    val result = code.getOrNull(returnIndex) as? OneRegisterInstruction
+    if (definingClass != "LX/VNn;" || name != "A01" || returnType != "LX/TmZ;" ||
+        !AccessFlags.STATIC.isSet(accessFlags) || parameterTypes.size != 11 ||
+        parameterTypes.getOrNull(1) != E2EE_DELTA || implementation!!.registerCount != 29 ||
+        returnIndex != code.lastIndex || result?.registerA != 0 ||
+        !strings.containsAll(setOf("client__e2ee_payload_type", "client__e2ee_placeholder_type",
+            "client__e2ee_local_data_id", "replied_to_message_id"))) {
+        throw PatchException("Messenger controls: verified E2EE incoming-message hook changed")
+    }
+    return returnIndex
+}
+
+internal fun MutableMethod.injectE2eeIncomingCapture() {
+    val returnIndex = validateE2eeIncomingCapture()
+    addInstructionsWithLabels(returnIndex, """
+        invoke-static {}, $SETTINGS->keepUnsent()Z
+        move-result v1
+        if-eqz v1, :hush_e2ee_capture_done
+        invoke-virtual {v0}, LX/TmZ;->A0H()Ljava/lang/String;
+        move-result-object v1
+        iget-object v2, v0, LX/TOF;->A00:LX/TOE;
+        invoke-virtual {v2}, LX/TOE;->A0x()Ljava/lang/String;
+        move-result-object v2
+        invoke-virtual {v0}, LX/TmZ;->A0J()Ljava/lang/String;
+        move-result-object v3
+        invoke-virtual {v0}, LX/TmZ;->A0A()LX/TmX;
+        move-result-object v4
+        if-eqz v4, :hush_e2ee_capture_done
+        invoke-virtual {v4}, LX/TmX;->A01()LX/TmY;
+        move-result-object v4
+        if-eqz v4, :hush_e2ee_capture_done
+        invoke-virtual {v4}, LX/TmY;->A07()LX/TmS;
+        move-result-object v4
+        if-eqz v4, :hush_e2ee_capture_done
+        invoke-static {}, $E2EE_TEXT_CONTENT->newBuilder()LX/UOB;
+        move-result-object v5
+        invoke-static {v4, v5}, LX/TS6;->A0V(LX/TOF;Ljava/lang/Object;)Ljava/lang/String;
+        move-result-object v4
+        iget-wide v5, p1, $E2EE_DELTA->A02:J
+        invoke-static/range {v1 .. v6}, $SETTINGS->captureIncomingMessage(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V
+    """.trimIndent(), ExternalLabel("hush_e2ee_capture_done", getInstruction(returnIndex)))
+}
+
+/** The client delete delta carries the exact message IDs Messenger is about to remove. */
+internal fun MutableMethod.validateE2eeDeleteCapture(): Pair<Int, Int> {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: E2EE delete hook has no code")
+    val strings = code.mapNotNull { ((it as? ReferenceInstruction)?.reference as? StringReference)?.string }.toSet()
+    val sites = code.indices.filter { index ->
+        val instruction = code[index]
+        instruction.opcode == Opcode.IGET_OBJECT &&
+            (instruction as? ReferenceInstruction)?.reference.toString() == E2EE_DELETE_IDS
+    }
+    val index = sites.singleOrNull()
+        ?: throw PatchException("Messenger controls: E2EE delete messageIds field changed")
+    val ids = (code[index] as? TwoRegisterInstruction)?.registerA
+        ?: throw PatchException("Messenger controls: E2EE delete messageIds register changed")
+    if (definingClass != "LX/VtI;" || name != "Czd" || returnType != "Ljava/util/List;" ||
+        parameterTypes != listOf("[B") || AccessFlags.STATIC.isSet(accessFlags) ||
+        "DeleteMessageClientDelta: empty messageIds" !in strings || ids > 15) {
+        throw PatchException("Messenger controls: verified E2EE delete hook changed")
+    }
+    return index to ids
+}
+
+internal fun MutableMethod.injectE2eeDeleteCapture() {
+    val (index, ids) = validateE2eeDeleteCapture()
+    addInstructions(index + 1,
+        "invoke-static {v$ids}, $SETTINGS->recordUnsentIds(Ljava/util/List;)V")
+}
+
 internal fun MutableMethod.validateKeepUnsent() {
     validateScratch()
     if (returnType != "V") throw PatchException("Messenger controls: keep_unsent hook must return void")
