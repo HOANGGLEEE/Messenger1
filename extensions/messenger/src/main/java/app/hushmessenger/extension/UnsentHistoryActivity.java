@@ -18,6 +18,7 @@ public final class UnsentHistoryActivity extends Activity {
     private SettingsText text;
     private SettingsUi ui;
     private LinearLayout list;
+    private TextView diagnostics;
 
     @Override public void onCreate(Bundle state) {
         HostScreens.start(this);
@@ -50,6 +51,10 @@ public final class UnsentHistoryActivity extends Activity {
         help.setTag("unsent_history_help");
         ui.add(root, help, 14);
 
+        diagnostics = ui.text("", 13, ui.muted, false);
+        diagnostics.setTag("unsent_history_diagnostics");
+        ui.add(root, diagnostics, 10);
+
         Button clear = ui.button(text.get("unsent_history_clear"));
         clear.setTag("unsent_history_clear");
         clear.setOnClickListener(view -> confirmClear());
@@ -70,6 +75,9 @@ public final class UnsentHistoryActivity extends Activity {
     }
 
     private void refresh() {
+        diagnostics.setText(text.get("unsent_history_diagnostics",
+            Settings.unsentCaptureHits(), Settings.unsentCaptureSaved(),
+            Settings.unsentRevokeHits(), Settings.unsentRevokeSaved()));
         list.removeAllViews();
         List<AntiUnsendStore.Entry> entries;
         try {
