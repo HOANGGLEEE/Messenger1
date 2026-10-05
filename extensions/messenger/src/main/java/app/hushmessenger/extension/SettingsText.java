@@ -201,7 +201,7 @@ final class SettingsText {
         ENGLISH.put("not_active", "Nothing to change yet since restart");
         ENGLISH.put("unsent_not_active", "No unsend activity observed since restart");
         ENGLISH.put("unsent_history_title", "Unsent message history");
-        ENGLISH.put("unsent_history_entry_help", "View messages Keep unsent has recorded locally on this device.");
+        ENGLISH.put("unsent_history_entry_help", "View messages saved locally on this device and later reported as unsent by Messenger.");
         ENGLISH.put("unsent_history_help", "Stored only on this device. A row can show missing content when Messenger revoked it before HushMessenger captured plaintext.");
         ENGLISH.put("unsent_history_back", "Back");
         ENGLISH.put("unsent_history_clear", "Clear history");
