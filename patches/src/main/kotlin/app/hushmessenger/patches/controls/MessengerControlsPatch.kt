@@ -213,6 +213,21 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
                     mutableClassDefBy(original.definingClass).methods.single { it.hookId() == original.hookId() }
                 }
             }
+            // The E2EE receive/delete path below is verified only for Messenger 580 variant 346013370.
+            // Other supported variants keep the established legacy behavior until their obfuscated model path is inspected.
+            val e2eeUnsend = if (key == "keep_unsent" && packageMetadata.versionCode == "346013370") {
+                val incoming = mutableClassDefBy("LX/VNn;").methods.singleOrNull { method ->
+                    method.name == "A01" && method.returnType == "LX/TmZ;" &&
+                        method.parameterTypes.getOrNull(1) == "Lcom/facebook/messaging/modularsync/models/delta/E2EEDelta;"
+                } ?: throw PatchException("Keep unsent: verified E2EE incoming hook is missing")
+                val deleting = mutableClassDefBy("LX/VtI;").methods.singleOrNull { method ->
+                    method.name == "Czd" && method.returnType == "Ljava/util/List;" && method.parameterTypes == listOf("[B")
+                } ?: throw PatchException("Keep unsent: verified E2EE delete hook is missing")
+                // Both contracts pass before any Keep-unsent method is edited.
+                incoming.validateE2eeIncomingCapture()
+                deleting.validateE2eeDeleteCapture()
+                incoming to deleting
+            } else null
             if (key == COMMUNITY_INBOX) {
                 val contract = communityInboxContract ?: throw PatchException("Messenger controls: the native community inbox route is missing")
                 val host = mutableClassDefBy(HOST_SCREENS)
@@ -234,7 +249,13 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
                 injectNativeBubbles(methods.getValue("bubbles").single(), methods.getValue("bubble_mode").single(),
                     capability, nativeBubbleRoutesVerified)
                 nativeRoutesApplied = nativeBubbleRoutesVerified
-            } else injectControl(key, methods)
+            } else {
+                injectControl(key, methods)
+                e2eeUnsend?.let { (incoming, deleting) ->
+                    incoming.injectE2eeIncomingCapture()
+                    deleting.injectE2eeDeleteCapture()
+                }
+            }
             recordControl(key)
             applied = true
         }
