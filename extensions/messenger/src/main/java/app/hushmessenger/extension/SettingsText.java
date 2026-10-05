@@ -203,6 +203,7 @@ final class SettingsText {
         ENGLISH.put("unsent_history_title", "Unsent message history");
         ENGLISH.put("unsent_history_entry_help", "View messages saved locally on this device and later reported as unsent by Messenger.");
         ENGLISH.put("unsent_history_help", "Stored only on this device. A row can show missing content when Messenger revoked it before HushMessenger captured plaintext.");
+        ENGLISH.put("unsent_history_diagnostics", "Capture hook: %d, saved: %d • Revoke hook: %d, marked: %d");
         ENGLISH.put("unsent_history_back", "Back");
         ENGLISH.put("unsent_history_clear", "Clear history");
         ENGLISH.put("unsent_history_clear_confirm", "Delete every locally saved unsent-message record?");
