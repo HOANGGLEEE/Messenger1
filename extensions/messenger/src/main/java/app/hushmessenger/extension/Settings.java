@@ -340,18 +340,19 @@ public final class Settings {
         }
     }
 
+    /**
+     * Render-path fallback for builds where this getter is the earliest verified plaintext surface.
+     * Cache the text for local history, but never alter what Messenger renders.
+     */
     public static String labelKeptUnsent(String text, String messageId) {
-        if (!wouldUse("keep_unsent")) return text;
-        // Render-path fallback. The verified 346013370 E2EE receive hook captures text earlier, before a chat must render.
-        if (text != null && !text.isEmpty()) captureIncomingMessage(messageId, text);
-        if (!isKeptUnsent(messageId)) return text;
-        String original = text;
-        if (original == null || original.isEmpty()) original = cachedUnsentText(messageId);
-        return original == null || original.isEmpty() ? text : "[unsent] " + original;
+        if (wouldUse("keep_unsent") && text != null && !text.isEmpty()) {
+            captureIncomingMessage(messageId, text);
+        }
+        return text;
     }
 
+    /** History-only mode never changes Messenger's own unsent state. */
     public static boolean suppressUnsent(boolean original, String messageId) {
-        if (original && wouldUse("keep_unsent") && isKeptUnsent(messageId)) return false;
         return original;
     }
 
