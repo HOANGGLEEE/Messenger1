@@ -1,0 +1,24 @@
+# Anti-Unsend V2 / history: trace the message object materialized by getMessageRange.
+# Run with:
+#   .\gradlew.bat :patches:inspectDex -PapkPath="<same-stock-messenger-apk>" -Ptarget="@scripts/anti_unsend_history_queries.txt" --no-daemon
+#
+# The goal is to identify the semantics of TmZ getters and the 88M result object
+# before wiring Settings.captureIncomingMessage(...) into a runtime hook.
+
+class:LX/TmZ;
+method:LX/TmZ;->A0H
+method:LX/TmZ;->A0I
+callers:LX/TmZ;->A0H
+callers:LX/TmZ;->A0I
+
+method:LX/TS6;->A0c
+callers:LX/TS6;->A0c
+
+class:LX/88M;
+callers:LX/88M;-><init>
+
+class:Lcom/facebook/messaging/modularsync/networkfetcher/mps/loader/MPSMessageLoader;
+method:Lcom/facebook/messaging/modularsync/networkfetcher/mps/loader/MPSMessageLoader;->A06
+method:Lcom/facebook/messaging/modularsync/networkfetcher/mps/loader/MPSMessageLoader;->A0B
+
+method:Lcom/facebook/messaging/modularsync/networkfetcher/MessengerE2eeMpsNetworkFetcher;->A0A
