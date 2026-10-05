@@ -1462,8 +1462,8 @@
             "options": []
         },
         {
-            "name": "Keep unsent messages",
-            "description": "Preserves messages on verified legacy unsend routes. End-to-end encrypted chats are unsupported, and group coverage is unverified. Activity records intercepted legacy unsends, not chat support. Your own unsend may be limited. Long-press Messenger's home screen icon > Patch controls. Starts off.",
+            "name": "Unsent message history",
+            "description": "Saves a private local text snapshot when a verified receive or render route exposes it, then marks that local record when Messenger reports an unsend. Messenger's own unsend behavior is left unchanged. Messenger 580 variant 346013370 has a verified E2EE receive/revoke path; other E2EE builds, media attachments and group coverage are not yet verified. Long-press Messenger's home screen icon > Patch controls. Starts off.",
             "default": true,
             "category": "Privacy",
             "dependencies": [
