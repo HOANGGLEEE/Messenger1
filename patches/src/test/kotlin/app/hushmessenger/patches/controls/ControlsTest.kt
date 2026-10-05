@@ -47,6 +47,26 @@ class ControlsTest {
             runnable.implementation!!.instructions.map { it.opcode })
     }
 
+    @Test fun unsentHistoryObserverRecordsThenFallsThroughToTheStockHandler() {
+        val revoke = MutableMethod(ImmutableMethod(
+            "Lfixture/Revoke;", "handle",
+            listOf(ImmutableMethodParameter("Landroid/content/Intent;", null, null)),
+            "V", AccessFlags.PUBLIC.value, null, null,
+            ImmutableMethodImplementation(3, emptyList(), null, null),
+        )).apply {
+            addInstructionsWithLabels(0, "const/4 v0, 0x0\nreturn-void")
+        }
+        val original = revoke.implementation!!.instructions.toList()
+        revoke.injectKeepUnsent()
+        val code = revoke.implementation!!.instructions.toList()
+        assertEquals(original, code.takeLast(original.size))
+        assertEquals(1, code.count { it.opcode == Opcode.RETURN_VOID })
+        assertTrue(code.any {
+            it is ReferenceInstruction &&
+                it.reference.toString() == "$SETTINGS->recordUnsent(Ljava/lang/String;)V"
+        })
+    }
+
     @Test fun missingOrAmbiguousAnchorsRejectTheApk() {
         assertFailsWith<PatchException> { validateControls(emptyMap()) }
         assertFailsWith<PatchException> { validateControls(expectedHooks.keys.associateWith { listOf(method(), method()) }) }
