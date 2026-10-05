@@ -98,6 +98,14 @@ public class SettingsTest {
         }
     }
 
+    @Test @Config(sdk = {28, 36}) public void e2eeDeleteBatchRecordsEveryStringMessageId() {
+        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
+        Settings.recordUnsentIds(java.util.Arrays.asList("e2ee-a", 7, null, "", "e2ee-b"));
+        assertEquals(java.util.Set.of("e2ee-a", "e2ee-b"),
+            Settings.preferences.getStringSet("kept_unsent_ids", java.util.Set.of()));
+        assertEquals(2, AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listUnsent(10).size());
+    }
+
     @Test @Config(sdk = {28, 36}) public void retainedUnsendChoiceSurvivesRestartWithoutClaimingChatCoverage() {
         Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
         Settings.recordUnsent("retained-message");
