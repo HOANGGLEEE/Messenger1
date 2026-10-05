@@ -133,6 +133,7 @@ final class SettingsTextVi {
         {"unsent_history_title", "Lịch sử tin nhắn đã thu hồi"},
         {"unsent_history_entry_help", "Xem các tin nhắn đã được lưu cục bộ trên thiết bị này và sau đó được Messenger báo là đã thu hồi."},
         {"unsent_history_help", "Chỉ lưu trên thiết bị này. Một mục có thể không có nội dung nếu Messenger thu hồi trước khi HushMessenger kịp lưu văn bản gốc."},
+        {"unsent_history_diagnostics", "Hook nhận tin: %d, đã lưu: %d • Hook thu hồi: %d, đã đánh dấu: %d"},
         {"unsent_history_back", "Quay lại"},
         {"unsent_history_clear", "Xóa lịch sử"},
         {"unsent_history_clear_confirm", "Xóa toàn bộ lịch sử tin nhắn đã thu hồi được lưu cục bộ?"},
