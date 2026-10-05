@@ -205,6 +205,10 @@ public class SettingsTest {
         Settings.recordUnsent("cached-message");
         assertNull(Settings.labelKeptUnsent(null, "cached-message"));
         assertEquals("cached before revoke", Settings.cachedUnsentText("cached-message"));
+        assertEquals(1, Settings.unsentCaptureHits());
+        assertEquals(1, Settings.unsentCaptureSaved());
+        assertEquals(1, Settings.unsentRevokeHits());
+        assertEquals(1, Settings.unsentRevokeSaved());
         assertEquals(1, AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listUnsent(10).size());
     }
 
