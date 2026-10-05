@@ -151,9 +151,9 @@ public class SetupSummaryTest {
                 assertTrue(control[0], report.contains(", scope=" + control[2] + "\n"));
             assertTrue(report.matches("(?s).*hide_read_receipts: installed=true, selected=true, active=true, last_active=\\d+s ago, scope=.*"));
             assertTrue(report.contains("Replying or switching this off may notify the sender."));
-            assertTrue(report.contains("records caught revokes in a private local history."));
-            assertTrue(report.contains("Text is restored when HushMessenger captured it before the revoke."));
-            assertTrue(report.contains("unseen-message receive coverage are not yet verified."));
+            assertTrue(report.contains("private local text snapshot"));
+            assertTrue(report.contains("Messenger's own unsend behavior is left unchanged."));
+            assertTrue(report.contains("verified E2EE receive/revoke path"));
             assertTrue(report.contains("This doesn't add replay or saving."));
             assertTrue(report.contains("Native Bubbles needs Android 11, account support and notification permissions."));
             assertTrue(report.contains("Search and community folders keep them. Delivery and unread counts stay unchanged."));
