@@ -1,0 +1,12 @@
+# Anti-Unsend V2: trace the E2EE delete/unsend delta.
+# Run from the repository root:
+#   .\gradlew.bat :patches:inspectDex -PapkPath="<stock-messenger-apk>" -Ptarget="@scripts/anti_unsend_delete_queries.txt" --no-daemon
+#
+# We already verified that plaintext messages are materialized into TmZ and serialized before MDCore persistence.
+# This batch finds the matching delete delta so HushMessenger can call Settings.recordUnsent(messageId).
+
+strings:DeleteMessageClientDelta
+strings:empty messageIds
+class:LX/VtI;
+method:LX/VtI;->Czd
+callers:LX/VtI;->Czd
