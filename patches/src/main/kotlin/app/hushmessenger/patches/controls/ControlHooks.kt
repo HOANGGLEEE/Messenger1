@@ -1089,8 +1089,12 @@ internal fun MutableMethod.injectMenuFolderClick(folderItemType: String) {
 }
 
 private const val E2EE_DELTA = "Lcom/facebook/messaging/modularsync/models/delta/E2EEDelta;"
-private const val E2EE_DELETE_DELTA = "Lcom/facebook/messaging/modularsync/models/delta/ClientDelta\$DeleteMessageClientDelta;"
-private const val E2EE_DELETE_IDS = "$E2EE_DELETE_DELTA->A02:Ljava/util/List;"
+private const val E2EE_REVOKE_MESSAGE =
+    "Lcom/facebook/xapp/messaging/modularsync/e2ee/model/protobuf/ConsumerApplicationOuterClass\$ConsumerApplication\$RevokeMessage;"
+private const val E2EE_MESSAGE_KEY =
+    "Lcom/facebook/xapp/messaging/modularsync/e2ee/model/protobuf/Common\$MessageKey;"
+private const val E2EE_REVOKE_KEY = "$E2EE_REVOKE_MESSAGE->key_:$E2EE_MESSAGE_KEY"
+private const val E2EE_MESSAGE_KEY_ID = "$E2EE_MESSAGE_KEY->id_:Ljava/lang/String;"
 private const val E2EE_TEXT_CONTENT =
     "Lcom/facebook/xapp/messaging/modularsync/message/models/protobuf/AppMessageModelFragmentProto\$AppMessageContentFBMessageTextContent;"
 
@@ -1146,32 +1150,50 @@ internal fun MutableMethod.injectE2eeIncomingCapture() {
     """.trimIndent(), ExternalLabel("hush_e2ee_capture_done", getInstruction(returnIndex)))
 }
 
-/** The client delete delta carries the exact message IDs Messenger is about to remove. */
+/**
+ * ConsumerApplication.RevokeMessage is Messenger's explicit E2EE unsend route. It names the
+ * revoked message through MessageKey.id immediately before Messenger builds a TmZ with
+ * is_unsent + unsent_timestamp_ms. Pin that exact sequence instead of treating every generic
+ * DeleteMessageClientDelta as an unsend.
+ */
 internal fun MutableMethod.validateE2eeDeleteCapture(): Pair<Int, Int> {
     val code = implementation?.instructions?.toList()
-        ?: throw PatchException("Messenger controls: E2EE delete hook has no code")
+        ?: throw PatchException("Messenger controls: E2EE revoke hook has no code")
     val strings = code.mapNotNull { ((it as? ReferenceInstruction)?.reference as? StringReference)?.string }.toSet()
-    val sites = code.indices.filter { index ->
+    val revokeSites = code.indices.filter { index ->
         val instruction = code[index]
         instruction.opcode == Opcode.IGET_OBJECT &&
-            (instruction as? ReferenceInstruction)?.reference.toString() == E2EE_DELETE_IDS
+            (instruction as? ReferenceInstruction)?.reference.toString() == E2EE_REVOKE_KEY
     }
-    val index = sites.singleOrNull()
-        ?: throw PatchException("Messenger controls: E2EE delete messageIds field changed")
-    val ids = (code[index] as? TwoRegisterInstruction)?.registerA
-        ?: throw PatchException("Messenger controls: E2EE delete messageIds register changed")
+    val matches = revokeSites.mapNotNull { revoke ->
+        val id = (revoke + 1..minOf(revoke + 6, code.lastIndex)).firstOrNull { index ->
+            val instruction = code[index]
+            instruction.opcode == Opcode.IGET_OBJECT &&
+                (instruction as? ReferenceInstruction)?.reference.toString() == E2EE_MESSAGE_KEY_ID
+        } ?: return@mapNotNull null
+        val register = (code[id] as? TwoRegisterInstruction)?.registerA ?: return@mapNotNull null
+        if (register > 15) return@mapNotNull null
+        val tail = code.subList(id + 1, minOf(id + 45, code.size))
+        val tailStrings = tail.mapNotNull {
+            ((it as? ReferenceInstruction)?.reference as? StringReference)?.string
+        }.toSet()
+        if (!tailStrings.containsAll(setOf("is_unsent", "unsent_timestamp_ms"))) return@mapNotNull null
+        id to register
+    }
+    val match = matches.singleOrNull()
+        ?: throw PatchException("Messenger controls: verified E2EE RevokeMessage route changed")
     if (definingClass != "LX/VtI;" || name != "Czd" || returnType != "Ljava/util/List;" ||
         parameterTypes != listOf("[B") || AccessFlags.STATIC.isSet(accessFlags) ||
-        "DeleteMessageClientDelta: empty messageIds" !in strings || ids > 15) {
-        throw PatchException("Messenger controls: verified E2EE delete hook changed")
+        "is_unsent" !in strings || "unsent_timestamp_ms" !in strings) {
+        throw PatchException("Messenger controls: verified E2EE revoke hook changed")
     }
-    return index to ids
+    return match
 }
 
 internal fun MutableMethod.injectE2eeDeleteCapture() {
-    val (index, ids) = validateE2eeDeleteCapture()
+    val (index, messageId) = validateE2eeDeleteCapture()
     addInstructions(index + 1,
-        "invoke-static {v$ids}, $SETTINGS->recordUnsentIds(Ljava/util/List;)V")
+        "invoke-static {v$messageId}, $SETTINGS->recordUnsent(Ljava/lang/String;)V")
 }
 
 internal fun MutableMethod.validateKeepUnsent() {
