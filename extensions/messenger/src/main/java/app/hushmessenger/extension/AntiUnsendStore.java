@@ -12,9 +12,10 @@ import java.util.List;
 /** Private local snapshots used only by Keep unsent messages. */
 final class AntiUnsendStore extends SQLiteOpenHelper {
     static final String DATABASE_NAME = "hush_unsent.db";
-    private static final int DATABASE_VERSION = 1;
+    private static final int DATABASE_VERSION = 2;
     private static final long RETENTION_MS = 30L * 24 * 60 * 60 * 1000;
     private static final int MAX_ROWS = 10_000;
+    private static final int MAX_NOTIFICATION_ROWS = 30;
     private static volatile AntiUnsendStore instance;
     private int writes;
 
@@ -36,6 +37,18 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
             this.messageTimestamp = messageTimestamp;
             this.receivedAt = receivedAt;
             this.unsentAt = unsentAt;
+        }
+    }
+
+    static final class NotificationEntry {
+        final String title;
+        final String text;
+        final long postedAt;
+
+        NotificationEntry(String title, String text, long postedAt) {
+            this.title = title;
+            this.text = text;
+            this.postedAt = postedAt;
         }
     }
 
@@ -66,10 +79,22 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
             "unsent_at INTEGER)");
         db.execSQL("CREATE INDEX messages_unsent_at ON messages(unsent_at DESC)");
         db.execSQL("CREATE INDEX messages_last_seen_at ON messages(last_seen_at)");
+        createNotificationTable(db);
+    }
+
+    private static void createNotificationTable(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS notification_snapshots (" +
+            "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+            "title TEXT NOT NULL DEFAULT ''," +
+            "text TEXT NOT NULL," +
+            "posted_at INTEGER NOT NULL," +
+            "UNIQUE(title, text, posted_at))");
+        db.execSQL("CREATE INDEX IF NOT EXISTS notification_snapshots_posted_at " +
+            "ON notification_snapshots(posted_at DESC)");
     }
 
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        // Version 1 is the first private anti-unsend store.
+        if (oldVersion < 2) createNotificationTable(db);
     }
 
     synchronized void captureText(String messageId, String threadId, String senderId,
@@ -119,6 +144,37 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         pruneOccasionally(db, now);
     }
 
+    synchronized boolean captureNotification(String title, String text, long postedAt) {
+        if (text == null || text.isEmpty()) return false;
+        long time = postedAt > 0 ? postedAt : System.currentTimeMillis();
+        ContentValues values = new ContentValues();
+        values.put("title", title == null ? "" : title);
+        values.put("text", text);
+        values.put("posted_at", time);
+        SQLiteDatabase db = getWritableDatabase();
+        long inserted = db.insertWithOnConflict(
+            "notification_snapshots", null, values, SQLiteDatabase.CONFLICT_IGNORE);
+        if (inserted == -1) return false;
+        db.execSQL("DELETE FROM notification_snapshots WHERE id NOT IN (" +
+            "SELECT id FROM notification_snapshots ORDER BY posted_at DESC, id DESC LIMIT " +
+            MAX_NOTIFICATION_ROWS + ")");
+        return true;
+    }
+
+    synchronized List<NotificationEntry> listNotificationSnapshots(int limit) {
+        if (limit <= 0) return Collections.emptyList();
+        List<NotificationEntry> entries = new ArrayList<>();
+        try (Cursor cursor = getReadableDatabase().query(
+                "notification_snapshots", new String[] {"title", "text", "posted_at"},
+                null, null, null, null, "posted_at DESC, id DESC", Integer.toString(limit))) {
+            while (cursor.moveToNext()) {
+                entries.add(new NotificationEntry(
+                    cursor.getString(0), cursor.getString(1), cursor.getLong(2)));
+            }
+        }
+        return entries;
+    }
+
     synchronized String unsentText(String messageId) {
         if (messageId == null || messageId.isEmpty()) return null;
         try (Cursor cursor = getReadableDatabase().query(
@@ -154,6 +210,13 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         return getWritableDatabase().delete("messages", "unsent_at IS NOT NULL", null);
     }
 
+    synchronized int clearAllHistory() {
+        SQLiteDatabase db = getWritableDatabase();
+        int deleted = db.delete("messages", "unsent_at IS NOT NULL", null);
+        deleted += db.delete("notification_snapshots", null, null);
+        return deleted;
+    }
+
     private void pruneOccasionally(SQLiteDatabase db, long now) {
         if ((++writes & 127) != 0) return;
         prune(db, now);
@@ -177,7 +240,9 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
     }
 
     synchronized void clearForTests() {
-        getWritableDatabase().delete("messages", null, null);
+        SQLiteDatabase db = getWritableDatabase();
+        db.delete("messages", null, null);
+        db.delete("notification_snapshots", null, null);
         writes = 0;
     }
 }

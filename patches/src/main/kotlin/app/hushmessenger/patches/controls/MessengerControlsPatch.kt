@@ -213,6 +213,18 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
                     mutableClassDefBy(original.definingClass).methods.single { it.hookId() == original.hookId() }
                 }
             }
+            // Notification snapshots are an optional fallback. They are discovered from stable Android
+            // framework calls instead of an obfuscated Messenger model class, so zero matches simply means
+            // this build has no direct post site for this fallback.
+            val notificationCaptureMethods = if (key == "keep_unsent") {
+                buildList {
+                    classDefForEach { classDef ->
+                        classDef.methods.filter { it.postsNotification() }.forEach { method ->
+                            add(classDef.type to method.hookId())
+                        }
+                    }
+                }
+            } else emptyList()
             // The E2EE receive/delete path below is verified only for Messenger 580 variant 346013370.
             // Other supported variants keep the established legacy behavior until their obfuscated model path is inspected.
             val e2eeUnsend = if (key == "keep_unsent" && packageMetadata.versionCode == "346013370") {
@@ -254,6 +266,12 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
                 e2eeUnsend?.let { (incoming, deleting) ->
                     incoming.injectE2eeIncomingCapture()
                     deleting.injectE2eeDeleteCapture()
+                }
+                if (key == "keep_unsent") {
+                    notificationCaptureMethods.forEach { (className, methodId) ->
+                        mutableClassDefBy(className).methods.single { it.hookId() == methodId }
+                            .injectNotificationCapture()
+                    }
                 }
             }
             recordControl(key)
@@ -316,7 +334,7 @@ val allowScreenshotPatch = controlPatch("allow_screenshot", "Allow screenshots",
 @Suppress("unused")
 val hideReadReceiptsPatch = controlPatch("hide_read_receipts", "Hide read receipts", "Stops sending read receipts. Opened encrypted chats can stay unread on this phone. Replying or switching this off may notify the sender. Group coverage isn't verified.", "Privacy", "hide_read_receipts", "read_mailbox")
 @Suppress("unused")
-val keepUnsentPatch = controlPatch("keep_unsent", "Unsent message history", "Saves a private local text snapshot when a verified receive or render route exposes it, then marks that local record when Messenger reports an unsend. Messenger's own unsend behavior is left unchanged. Messenger 580 variant 346013370 has a verified E2EE receive/revoke path; other E2EE builds, media attachments and group coverage are not yet verified.", "Privacy", "keep_unsent", "unsent_indicator")
+val keepUnsentPatch = controlPatch("keep_unsent", "Unsent message history", "Saves a private local text snapshot when a verified receive or render route exposes it, then marks that local record when Messenger reports an unsend. Messenger's own unsend behavior is left unchanged. It also keeps up to 30 recent notification-text snapshots as a fallback; those fallback rows are not called unsent because Android notifications do not reliably expose Messenger message IDs. Messenger 580 variant 346013370 has a verified E2EE receive/revoke path; other E2EE builds, media attachments and group coverage are not yet verified.", "Privacy", "keep_unsent", "unsent_indicator")
 private var anonymousStoriesApplied = false
 
 private val anonymousStoriesResources = resourcePatch(description = "Record HushMessenger capability: anonymous_stories") {

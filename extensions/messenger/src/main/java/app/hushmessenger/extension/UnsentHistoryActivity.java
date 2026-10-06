@@ -77,11 +77,16 @@ public final class UnsentHistoryActivity extends Activity {
     private void refresh() {
         diagnostics.setText(text.get("unsent_history_diagnostics",
             Settings.unsentCaptureHits(), Settings.unsentCaptureSaved(),
-            Settings.unsentRevokeHits(), Settings.unsentRevokeSaved()));
+            Settings.unsentRevokeHits(), Settings.unsentRevokeSaved()) + "\n" +
+            text.get("unsent_history_notification_diagnostics",
+                Settings.unsentNotificationHits(), Settings.unsentNotificationSaved()));
         list.removeAllViews();
         List<AntiUnsendStore.Entry> entries;
+        List<AntiUnsendStore.NotificationEntry> notificationEntries;
         try {
-            entries = AntiUnsendStore.get(this).listUnsent(500);
+            AntiUnsendStore store = AntiUnsendStore.get(this);
+            entries = store.listUnsent(500);
+            notificationEntries = store.listNotificationSnapshots(30);
         } catch (RuntimeException error) {
             Settings.hookFailedPrivately("keep_unsent", "Can't read unsent history", error);
             TextView failed = ui.text(text.get("unsent_history_read_failed"), 14, ui.muted, false);
@@ -90,28 +95,54 @@ public final class UnsentHistoryActivity extends Activity {
             return;
         }
 
+        DateFormat dates = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT);
+
+        TextView confirmedTitle = ui.text(text.get("unsent_history_confirmed_section"), 17, ui.text, true);
+        confirmedTitle.setAccessibilityHeading(true);
+        ui.add(list, confirmedTitle, 20);
         if (entries.isEmpty()) {
             TextView empty = ui.text(text.get("unsent_history_empty"), 15, ui.muted, false);
             empty.setTag("unsent_history_empty");
-            ui.add(list, empty, 20);
-            return;
+            ui.add(list, empty, 10);
+        } else {
+            for (AntiUnsendStore.Entry entry : entries) {
+                LinearLayout card = ui.panel();
+                String sender = entry.senderId == null || entry.senderId.isEmpty()
+                    ? text.get("unsent_history_unknown_sender") : entry.senderId;
+                ui.add(card, ui.text(text.get("unsent_history_sender", sender), 13, ui.muted, true), 0);
+                TextView body = ui.text(entry.text == null || entry.text.isEmpty()
+                    ? text.get("unsent_history_missing_text") : entry.text, 16, ui.text, false);
+                body.setTextIsSelectable(true);
+                ui.add(card, body, 8);
+                ui.add(card, ui.text(text.get("unsent_history_received_at",
+                    dates.format(new Date(entry.receivedAt))), 12, ui.muted, false), 10);
+                ui.add(card, ui.text(text.get("unsent_history_unsent_at",
+                    dates.format(new Date(entry.unsentAt))), 12, ui.muted, false), 4);
+                ui.add(list, card, 12);
+            }
         }
 
-        DateFormat dates = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT);
-        for (AntiUnsendStore.Entry entry : entries) {
-            LinearLayout card = ui.panel();
-            String sender = entry.senderId == null || entry.senderId.isEmpty()
-                ? text.get("unsent_history_unknown_sender") : entry.senderId;
-            ui.add(card, ui.text(text.get("unsent_history_sender", sender), 13, ui.muted, true), 0);
-            TextView body = ui.text(entry.text == null || entry.text.isEmpty()
-                ? text.get("unsent_history_missing_text") : entry.text, 16, ui.text, false);
-            body.setTextIsSelectable(true);
-            ui.add(card, body, 8);
-            ui.add(card, ui.text(text.get("unsent_history_received_at",
-                dates.format(new Date(entry.receivedAt))), 12, ui.muted, false), 10);
-            ui.add(card, ui.text(text.get("unsent_history_unsent_at",
-                dates.format(new Date(entry.unsentAt))), 12, ui.muted, false), 4);
-            ui.add(list, card, 12);
+        TextView fallbackTitle = ui.text(text.get("unsent_history_notification_section"), 17, ui.text, true);
+        fallbackTitle.setAccessibilityHeading(true);
+        ui.add(list, fallbackTitle, 24);
+        ui.add(list, ui.text(text.get("unsent_history_notification_help"), 13, ui.muted, false), 8);
+        if (notificationEntries.isEmpty()) {
+            TextView empty = ui.text(text.get("unsent_history_notification_empty"), 15, ui.muted, false);
+            empty.setTag("unsent_history_notification_empty");
+            ui.add(list, empty, 10);
+        } else {
+            for (AntiUnsendStore.NotificationEntry entry : notificationEntries) {
+                LinearLayout card = ui.panel();
+                String sender = entry.title == null || entry.title.isEmpty()
+                    ? text.get("unsent_history_unknown_sender") : entry.title;
+                ui.add(card, ui.text(text.get("unsent_history_sender", sender), 13, ui.muted, true), 0);
+                TextView body = ui.text(entry.text, 16, ui.text, false);
+                body.setTextIsSelectable(true);
+                ui.add(card, body, 8);
+                ui.add(card, ui.text(text.get("unsent_history_notification_at",
+                    dates.format(new Date(entry.postedAt))), 12, ui.muted, false), 10);
+                ui.add(list, card, 12);
+            }
         }
     }
 
@@ -122,7 +153,7 @@ public final class UnsentHistoryActivity extends Activity {
             .setNegativeButton(android.R.string.cancel, null)
             .setPositiveButton(text.get("unsent_history_clear"), (dialog, which) -> {
                 try {
-                    AntiUnsendStore.get(this).clearUnsentHistory();
+                    AntiUnsendStore.get(this).clearAllHistory();
                     refresh();
                     Toast.makeText(this, text.get("unsent_history_cleared"), Toast.LENGTH_SHORT).show();
                 } catch (RuntimeException error) {

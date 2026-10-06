@@ -1898,7 +1898,7 @@
         },
         {
             "name": "Unsent message history",
-            "description": "Saves a private local text snapshot when a verified receive or render route exposes it, then marks that local record when Messenger reports an unsend. Messenger's own unsend behavior is left unchanged. Messenger 580 variant 346013370 has a verified E2EE receive/revoke path; other E2EE builds, media attachments and group coverage are not yet verified. Long-press Messenger's home screen icon > Patch controls. Starts off.",
+            "description": "Saves a private local text snapshot when a verified receive or render route exposes it, then marks that local record when Messenger reports an unsend. Messenger's own unsend behavior is left unchanged. It also keeps up to 30 recent notification-text snapshots as a fallback; those fallback rows are not called unsent because Android notifications do not reliably expose Messenger message IDs. Messenger 580 variant 346013370 has a verified E2EE receive/revoke path; other E2EE builds, media attachments and group coverage are not yet verified. Long-press Messenger's home screen icon > Patch controls. Starts off.",
             "default": true,
             "category": "Privacy",
             "dependencies": [

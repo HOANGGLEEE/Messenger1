@@ -1,6 +1,8 @@
 package app.hushmessenger.extension;
 
+import android.app.Notification;
 import android.net.Uri;
+import android.os.Bundle;
 import android.view.View;
 import android.content.Context;
 import android.content.Intent;
@@ -210,6 +212,42 @@ public class SettingsTest {
         assertEquals(1, Settings.unsentRevokeHits());
         assertEquals(1, Settings.unsentRevokeSaved());
         assertEquals(1, AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listUnsent(10).size());
+    }
+
+    @Test @Config(sdk = {28, 36}) public void notificationFallbackArchivesVisibleTextWithoutCallingItUnsent() {
+        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
+        Notification notification = new Notification();
+        notification.when = 123_000L;
+        notification.extras = new Bundle();
+
+        Bundle first = new Bundle();
+        first.putCharSequence("sender", "Alice");
+        first.putCharSequence("text", "first unseen");
+        first.putLong("time", 123_001L);
+        Bundle second = new Bundle();
+        second.putCharSequence("sender", "Alice");
+        second.putCharSequence("text", "second unseen");
+        second.putLong("time", 123_002L);
+        notification.extras.putParcelableArray("android.messages",
+            new android.os.Parcelable[] {first, second});
+
+        Settings.captureNotification(notification);
+
+        java.util.List<AntiUnsendStore.NotificationEntry> snapshots =
+            AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listNotificationSnapshots(30);
+        assertEquals(2, snapshots.size());
+        assertEquals("second unseen", snapshots.get(0).text);
+        assertEquals("Alice", snapshots.get(0).title);
+        assertTrue(AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listUnsent(10).isEmpty());
+        assertEquals(1, Settings.unsentNotificationHits());
+        assertEquals(2, Settings.unsentNotificationSaved());
+
+        // Reposting the same MessagingStyle payload is de-duplicated by title, text and message time.
+        Settings.captureNotification(notification);
+        assertEquals(2, AntiUnsendStore.get(RuntimeEnvironment.getApplication())
+            .listNotificationSnapshots(30).size());
+        assertEquals(2, Settings.unsentNotificationHits());
+        assertEquals(2, Settings.unsentNotificationSaved());
     }
 
     @Test public void settingsExposeLocalUnsentHistory() {

@@ -20,6 +20,7 @@ import com.android.tools.smali.dexlib2.iface.Method
 import com.android.tools.smali.dexlib2.iface.instruction.Instruction
 import com.android.tools.smali.dexlib2.iface.instruction.NarrowLiteralInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
+import com.android.tools.smali.dexlib2.iface.instruction.RegisterRangeInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.WideLiteralInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.FiveRegisterInstruction
@@ -1086,6 +1087,45 @@ internal fun MutableMethod.injectMenuFolderClick(folderItemType: String) {
         :hush_folder_row
         check-cast v$row, $folderItemType
     """.trimIndent())
+}
+
+private val NOTIFICATION_POST_METHODS = setOf(
+    "Landroid/app/NotificationManager;->notify(ILandroid/app/Notification;)V",
+    "Landroid/app/NotificationManager;->notify(Ljava/lang/String;ILandroid/app/Notification;)V",
+    "Landroidx/core/app/NotificationManagerCompat;->notify(ILandroid/app/Notification;)V",
+    "Landroidx/core/app/NotificationManagerCompat;->notify(Ljava/lang/String;ILandroid/app/Notification;)V",
+)
+
+private fun Instruction.notificationArgumentRegister(): Int? {
+    val reference = (this as? ReferenceInstruction)?.reference?.toString() ?: return null
+    if (reference !in NOTIFICATION_POST_METHODS) return null
+    return when (this) {
+        is FiveRegisterInstruction -> {
+            val registers = intArrayOf(registerC, registerD, registerE, registerF, registerG)
+            if (registerCount in 1..registers.size) registers[registerCount - 1] else null
+        }
+        is RegisterRangeInstruction -> if (registerCount > 0) startRegister + registerCount - 1 else null
+        else -> null
+    }
+}
+
+/** Direct Android notification posts are a local fallback when no verified message-model receive hook exists. */
+internal fun Method.postsNotification(): Boolean =
+    implementation?.instructions?.any { it.notificationArgumentRegister() != null } == true
+
+/**
+ * Copy the Notification object immediately before Messenger posts it. The helper only snapshots
+ * plaintext already present in the app process and never changes or suppresses the stock notify call.
+ */
+internal fun MutableMethod.injectNotificationCapture(): Int {
+    val sites = implementation?.instructions?.toList()?.mapIndexedNotNull { index, instruction ->
+        instruction.notificationArgumentRegister()?.let { index to it }
+    }.orEmpty()
+    for ((index, register) in sites.asReversed()) {
+        addInstructions(index,
+            "invoke-static/range {v$register .. v$register}, $SETTINGS->captureNotification(Landroid/app/Notification;)V")
+    }
+    return sites.size
 }
 
 private const val E2EE_DELTA = "Lcom/facebook/messaging/modularsync/models/delta/E2EEDelta;"

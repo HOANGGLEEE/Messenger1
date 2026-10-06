@@ -1,5 +1,7 @@
 package app.hushmessenger.extension;
 
+import android.app.Notification;
+import android.app.Person;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
@@ -277,6 +279,8 @@ public final class Settings {
     private static final String UNSENT_CAPTURE_SAVED = "unsent_capture_saved";
     private static final String UNSENT_REVOKE_HITS = "unsent_revoke_hits";
     private static final String UNSENT_REVOKE_SAVED = "unsent_revoke_saved";
+    private static final String UNSENT_NOTIFICATION_HITS = "unsent_notification_hits";
+    private static final String UNSENT_NOTIFICATION_SAVED = "unsent_notification_saved";
 
     private static synchronized void incrementUnsentCounter(String key) {
         SharedPreferences prefs = preferences;
@@ -302,6 +306,93 @@ public final class Settings {
     static long unsentRevokeSaved() {
         SharedPreferences prefs = preferences;
         return prefs == null ? 0 : prefs.getLong(UNSENT_REVOKE_SAVED, 0);
+    }
+
+    static long unsentNotificationHits() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_NOTIFICATION_HITS, 0);
+    }
+
+    static long unsentNotificationSaved() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_NOTIFICATION_SAVED, 0);
+    }
+
+    private static String notificationText(Bundle extras, String... keys) {
+        for (String key : keys) {
+            CharSequence value = extras.getCharSequence(key);
+            if (value != null) {
+                String text = value.toString().trim();
+                if (!text.isEmpty()) return text;
+            }
+        }
+        return null;
+    }
+
+    private static String notificationSender(Bundle message, String fallback) {
+        CharSequence sender = message.getCharSequence("sender");
+        if (sender != null && sender.length() > 0) return sender.toString();
+        Object person = message.get("sender_person");
+        if (person instanceof Person) {
+            CharSequence name = ((Person) person).getName();
+            if (name != null && name.length() > 0) return name.toString();
+        }
+        return fallback == null ? "" : fallback;
+    }
+
+    private static int captureNotificationMessages(AntiUnsendStore store, Bundle extras,
+            String key, String fallbackTitle, long fallbackTime) {
+        android.os.Parcelable[] raw = extras.getParcelableArray(key);
+        if (raw == null || raw.length == 0) return 0;
+        int saved = 0;
+        for (android.os.Parcelable value : raw) {
+            if (!(value instanceof Bundle)) continue;
+            Bundle message = (Bundle) value;
+            CharSequence body = message.getCharSequence("text");
+            if (body == null || body.length() == 0) continue;
+            long time = message.getLong("time", fallbackTime);
+            if (store.captureNotification(
+                    notificationSender(message, fallbackTitle), body.toString(), time)) saved++;
+        }
+        return saved;
+    }
+
+    /**
+     * Snapshot plaintext already placed in a Messenger Notification immediately before the stock
+     * NotificationManager.notify call. This is a fallback archive only: Android notification
+     * bundles do not reliably expose Messenger message IDs, so these rows are never marked unsent.
+     */
+    public static void captureNotification(Notification notification) {
+        if (notification == null || !wouldUse("keep_unsent")) return;
+        incrementUnsentCounter(UNSENT_NOTIFICATION_HITS);
+        Context context = appContext;
+        if (context == null) return;
+        try {
+            Bundle extras = notification.extras;
+            if (extras == null) return;
+            String title = notificationText(extras,
+                "android.conversationTitle", "android.title.big", "android.title",
+                "android.hiddenConversationTitle");
+            long fallbackTime = notification.when > 0 ? notification.when : System.currentTimeMillis();
+            AntiUnsendStore store = AntiUnsendStore.get(context);
+            int saved = captureNotificationMessages(store, extras, "android.messages", title, fallbackTime);
+            saved += captureNotificationMessages(store, extras, "android.messages.historic", title, fallbackTime);
+            if (saved == 0) {
+                String body = notificationText(extras,
+                    "android.bigText", "android.text", "android.summaryText",
+                    "android.infoText", "android.subText");
+                if (body == null) {
+                    CharSequence[] lines = extras.getCharSequenceArray("android.textLines");
+                    if (lines != null) for (int i = lines.length - 1; i >= 0 && body == null; i--) {
+                        if (lines[i] != null && lines[i].length() > 0) body = lines[i].toString();
+                    }
+                }
+                if (body != null && store.captureNotification(title, body, fallbackTime)) saved = 1;
+            }
+            for (int i = 0; i < saved; i++) incrementUnsentCounter(UNSENT_NOTIFICATION_SAVED);
+        } catch (RuntimeException error) {
+            hookFailedPrivately("keep_unsent", "Can't cache notification text", error);
+        }
     }
 
     /**
