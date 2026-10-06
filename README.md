@@ -1,7 +1,7 @@
 ![HushMessenger. Keep the conversation. Cut the friction.](assets/readme-hero.png)
 
 <p align="center">
-  <a href="https://github.com/HOANGGLEEE/Messenger1"><img src="https://img.shields.io/badge/development-0.21.0-0084FF" alt="Development 0.21.0"></a>
+  <a href="https://github.com/HOANGGLEEE/Messenger1"><img src="https://img.shields.io/badge/version-0.21.0-0084FF" alt="Version 0.21.0"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License GPL-3.0"></a>
   <img src="https://img.shields.io/badge/platform-Android%209%2B%20arm64-3DDC84" alt="Platform Android 9 or newer, arm64">
   <img src="https://img.shields.io/badge/Messenger-580%20and%20581-0084FF" alt="Messenger 580.0.0.49.91 and 581.0.0.49.91">
