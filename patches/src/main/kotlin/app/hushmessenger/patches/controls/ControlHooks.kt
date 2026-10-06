@@ -1092,8 +1092,6 @@ internal fun MutableMethod.injectMenuFolderClick(folderItemType: String) {
 private val NOTIFICATION_POST_METHODS = setOf(
     "Landroid/app/NotificationManager;->notify(ILandroid/app/Notification;)V",
     "Landroid/app/NotificationManager;->notify(Ljava/lang/String;ILandroid/app/Notification;)V",
-    "Landroidx/core/app/NotificationManagerCompat;->notify(ILandroid/app/Notification;)V",
-    "Landroidx/core/app/NotificationManagerCompat;->notify(Ljava/lang/String;ILandroid/app/Notification;)V",
 )
 
 private fun Instruction.notificationArgumentRegister(): Int? {

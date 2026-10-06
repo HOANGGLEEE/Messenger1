@@ -212,7 +212,7 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
 
     synchronized int clearAllHistory() {
         SQLiteDatabase db = getWritableDatabase();
-        int deleted = db.delete("messages", "unsent_at IS NOT NULL", null);
+        int deleted = db.delete("messages", null, null);
         deleted += db.delete("notification_snapshots", null, null);
         return deleted;
     }

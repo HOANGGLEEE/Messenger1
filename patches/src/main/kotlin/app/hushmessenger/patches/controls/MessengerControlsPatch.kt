@@ -216,15 +216,14 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
             // Notification snapshots are an optional fallback. They are discovered from stable Android
             // framework calls instead of an obfuscated Messenger model class, so zero matches simply means
             // this build has no direct post site for this fallback.
-            val notificationCaptureMethods = if (key == "keep_unsent") {
-                buildList {
-                    classDefForEach { classDef ->
-                        classDef.methods.filter { it.postsNotification() }.forEach { method ->
-                            add(classDef.type to method.hookId())
-                        }
+            val notificationCaptureMethods = mutableListOf<Pair<String, String>>()
+            if (key == "keep_unsent") {
+                classDefForEach { classDef ->
+                    classDef.methods.filter { it.postsNotification() }.forEach { method ->
+                        notificationCaptureMethods.add(classDef.type to method.hookId())
                     }
                 }
-            } else emptyList()
+            }
             // The E2EE receive/delete path below is verified only for Messenger 580 variant 346013370.
             // Other supported variants keep the established legacy behavior until their obfuscated model path is inspected.
             val e2eeUnsend = if (key == "keep_unsent" && packageMetadata.versionCode == "346013370") {

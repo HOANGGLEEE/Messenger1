@@ -387,7 +387,8 @@ public final class Settings {
                         if (lines[i] != null && lines[i].length() > 0) body = lines[i].toString();
                     }
                 }
-                if (body != null && store.captureNotification(title, body, fallbackTime)) saved = 1;
+                if (body != null && title != null && !title.isEmpty() &&
+                        store.captureNotification(title, body, fallbackTime)) saved = 1;
             }
             for (int i = 0; i < saved; i++) incrementUnsentCounter(UNSENT_NOTIFICATION_SAVED);
         } catch (RuntimeException error) {
