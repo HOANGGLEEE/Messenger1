@@ -336,7 +336,7 @@ Before publishing, synchronize the release version, source index, changelog and 
 The [v0.21.0 release](https://github.com/HOANGGLEEE/Messenger1/releases/tag/v0.21.0) includes the `.mpp` bundle. Compare its hash with a locally built artifact when publishing or installing a release.
 
 ```text
-Generate the current checksum with `Get-FileHash -Algorithm SHA256 patches/build/libs/patches-0.21.0.mpp`.
+bbbab8e2bc8bcd8cbede70e9948484d943ca55fd8698d648952a4a6fd30cc462  patches-0.21.0.mpp
 ```
 
 Morphe Manager and Desktop do not verify detached patch-bundle signatures automatically. Publish checksums beside each release and verify downloaded artifacts before use.
