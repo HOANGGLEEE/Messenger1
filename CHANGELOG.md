@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.21.0 (2026-10-06)
 
-Current release: 0.20.1.
+- **Unsent message history** is now a local archive instead of an unsend blocker. HushMessenger saves plaintext already available on the device, marks an exact local record when Messenger reports a revoke, and always lets Messenger continue its normal unsend behavior.
+- Messenger 580 build 346013370 has a verified E2EE receive/revoke path. A separate notification fallback copies up to 30 recent plaintext notification snapshots before the stock notification is posted, which can preserve text for messages that arrived before the chat was opened. Notification-only rows stay separate because Android notifications do not reliably expose Messenger message IDs.
+- The local history screen separates exact unsent matches from notification snapshots, includes diagnostic counters for receive/revoke/notification hooks, and can clear the complete local archive. No image or video archiving is included in this release.
 
 - Theme return hooks keep incoming branches attached to the color helper. Menu binding rejects reused holder registers before making changes, and the story Save helper is retained even when the patcher has already cached direct methods.
 
