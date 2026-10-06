@@ -56,7 +56,7 @@ public class HostScreensTest {
     private static void mount() {
         Application app = RuntimeEnvironment.getApplication();
         var packages = Shadows.shadowOf(app.getPackageManager());
-        for (Class<?> screen : new Class<?>[] {SettingsActivity.class, RestartActivity.class}) {
+        for (Class<?> screen : new Class<?>[] {SettingsActivity.class, UnsentHistoryActivity.class, RestartActivity.class}) {
             ComponentName name = new ComponentName(app, screen);
             app.getPackageManager().setComponentEnabledSetting(name, PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP);
             packages.removeActivity(name);
@@ -65,6 +65,7 @@ public class HostScreensTest {
 
     @Test public void onlyAStockHostWithAScreenBecomesAHushMessengerScreen() {
         assertTrue(HostScreens.activityFor(HostScreens.SCREEN_HOST, host("settings")) instanceof SettingsActivity);
+        assertTrue(HostScreens.activityFor(HostScreens.SCREEN_HOST, host("history")) instanceof UnsentHistoryActivity);
         assertTrue(HostScreens.activityFor(HostScreens.SCREEN_HOST, host("restart")) instanceof RestartActivity);
         for (String screen : new String[] {"settings", "restart"}) {
             assertTrue(HostScreens.activityFor(HostScreens.SHORTCUT_HOST, host(screen)) instanceof HostScreens.ShortcutTrampoline);
@@ -88,6 +89,9 @@ public class HostScreensTest {
         assertEquals(Intent.FLAG_ACTIVITY_NEW_TASK, settings.getFlags());
         assertFalse(settings.hasExtra(HostScreens.EXTRA));
         try (var screen = Robolectric.buildActivity(Activity.class).setup()) {
+            Intent history = HostScreens.intentFor(screen.get(), HostScreens.HISTORY);
+            assertEquals(new ComponentName(app, UnsentHistoryActivity.class), history.getComponent());
+            assertEquals(0, history.getFlags());
             Intent restart = HostScreens.intentFor(screen.get(), HostScreens.RESTART);
             assertEquals(new ComponentName(app, RestartActivity.class), restart.getComponent());
             assertEquals(0, restart.getFlags());
@@ -112,6 +116,10 @@ public class HostScreensTest {
         // The host shares Messenger's task affinity, so settings open as their own document task instead.
         assertEquals(SEPARATE, settings.getFlags());
         try (var screen = Robolectric.buildActivity(Activity.class).setup()) {
+            Intent history = HostScreens.intentFor(screen.get(), HostScreens.HISTORY);
+            assertEquals(new ComponentName(app.getPackageName(), HostScreens.SCREEN_HOST), history.getComponent());
+            assertEquals("history", history.getStringExtra(HostScreens.EXTRA));
+            assertEquals(0, history.getFlags());
             Intent restart = HostScreens.intentFor(screen.get(), HostScreens.RESTART);
             assertEquals(new ComponentName(app.getPackageName(), HostScreens.SCREEN_HOST), restart.getComponent());
             assertEquals("restart", restart.getStringExtra(HostScreens.EXTRA));

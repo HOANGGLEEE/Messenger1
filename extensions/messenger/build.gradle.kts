@@ -37,4 +37,7 @@ configurations.configureEach {
 tasks.withType<Test>().configureEach {
     // Robolectric's API 36 file-descriptor bridge needs this JDK 21 export.
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
+
+    // The full suite includes a 20 MB OriginalPhoto boundary test and can otherwise exhaust the default test heap.
+    maxHeapSize = "1536m"
 }

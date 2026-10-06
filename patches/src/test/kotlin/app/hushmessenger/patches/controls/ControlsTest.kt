@@ -47,6 +47,47 @@ class ControlsTest {
             runnable.implementation!!.instructions.map { it.opcode })
     }
 
+    @Test fun unsentHistoryObserverRecordsThenFallsThroughToTheStockHandler() {
+        val revoke = MutableMethod(ImmutableMethod(
+            "Lfixture/Revoke;", "handle",
+            listOf(ImmutableMethodParameter("Landroid/content/Intent;", null, null)),
+            "V", AccessFlags.PUBLIC.value, null, null,
+            ImmutableMethodImplementation(3, emptyList(), null, null),
+        )).apply {
+            addInstructionsWithLabels(0, "const/4 v0, 0x0\nreturn-void")
+        }
+        val original = revoke.implementation!!.instructions.toList()
+        revoke.injectKeepUnsent()
+        val code = revoke.implementation!!.instructions.toList()
+        assertEquals(original, code.takeLast(original.size))
+        assertEquals(1, code.count { it.opcode == Opcode.RETURN_VOID })
+        assertTrue(code.any {
+            it is ReferenceInstruction &&
+                it.reference.toString() == "$SETTINGS->recordUnsent(Ljava/lang/String;)V"
+        })
+    }
+
+    @Test fun notificationFallbackCopiesTheNotificationThenKeepsTheStockNotifyCall() {
+        val post = MutableMethod(ImmutableMethod(
+            "Lfixture/Notifications;", "post", emptyList(),
+            "V", AccessFlags.PUBLIC.value, null, null,
+            ImmutableMethodImplementation(3, emptyList(), null, null),
+        )).apply {
+            addInstructionsWithLabels(0, """
+                invoke-virtual {v0, v1, v2}, Landroid/app/NotificationManager;->notify(ILandroid/app/Notification;)V
+                return-void
+            """.trimIndent())
+        }
+        val original = post.implementation!!.instructions.toList()
+        assertTrue(post.postsNotification())
+        assertEquals(1, post.injectNotificationCapture())
+        val code = post.implementation!!.instructions.toList()
+        assertEquals(original, code.drop(1))
+        assertEquals("$SETTINGS->captureNotification(Landroid/app/Notification;)V",
+            (code[0] as ReferenceInstruction).reference.toString())
+        assertEquals(Opcode.INVOKE_STATIC_RANGE, code[0].opcode)
+    }
+
     @Test fun missingOrAmbiguousAnchorsRejectTheApk() {
         assertFailsWith<PatchException> { validateControls(emptyMap()) }
         assertFailsWith<PatchException> { validateControls(expectedHooks.keys.associateWith { listOf(method(), method()) }) }

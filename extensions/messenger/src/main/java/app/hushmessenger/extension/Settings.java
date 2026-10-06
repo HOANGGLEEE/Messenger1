@@ -1,5 +1,7 @@
 package app.hushmessenger.extension;
 
+import android.app.Notification;
+import android.app.Person;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
@@ -273,14 +275,176 @@ public final class Settings {
     }
 
     private static final String KEPT_UNSENT_KEY = "kept_unsent_ids";
+    private static final String UNSENT_CAPTURE_HITS = "unsent_capture_hits";
+    private static final String UNSENT_CAPTURE_SAVED = "unsent_capture_saved";
+    private static final String UNSENT_REVOKE_HITS = "unsent_revoke_hits";
+    private static final String UNSENT_REVOKE_SAVED = "unsent_revoke_saved";
+    private static final String UNSENT_NOTIFICATION_HITS = "unsent_notification_hits";
+    private static final String UNSENT_NOTIFICATION_SAVED = "unsent_notification_saved";
+
+    private static synchronized void incrementUnsentCounter(String key) {
+        SharedPreferences prefs = preferences;
+        if (prefs == null) return;
+        prefs.edit().putLong(key, prefs.getLong(key, 0) + 1).apply();
+    }
+
+    static long unsentCaptureHits() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_CAPTURE_HITS, 0);
+    }
+
+    static long unsentCaptureSaved() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_CAPTURE_SAVED, 0);
+    }
+
+    static long unsentRevokeHits() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_REVOKE_HITS, 0);
+    }
+
+    static long unsentRevokeSaved() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_REVOKE_SAVED, 0);
+    }
+
+    static long unsentNotificationHits() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_NOTIFICATION_HITS, 0);
+    }
+
+    static long unsentNotificationSaved() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_NOTIFICATION_SAVED, 0);
+    }
+
+    private static String notificationText(Bundle extras, String... keys) {
+        for (String key : keys) {
+            CharSequence value = extras.getCharSequence(key);
+            if (value != null) {
+                String text = value.toString().trim();
+                if (!text.isEmpty()) return text;
+            }
+        }
+        return null;
+    }
+
+    private static String notificationSender(Bundle message, String fallback) {
+        CharSequence sender = message.getCharSequence("sender");
+        if (sender != null && sender.length() > 0) return sender.toString();
+        Object person = message.get("sender_person");
+        if (person instanceof Person) {
+            CharSequence name = ((Person) person).getName();
+            if (name != null && name.length() > 0) return name.toString();
+        }
+        return fallback == null ? "" : fallback;
+    }
+
+    private static int captureNotificationMessages(AntiUnsendStore store, Bundle extras,
+            String key, String fallbackTitle, long fallbackTime) {
+        android.os.Parcelable[] raw = extras.getParcelableArray(key);
+        if (raw == null || raw.length == 0) return 0;
+        int saved = 0;
+        for (android.os.Parcelable value : raw) {
+            if (!(value instanceof Bundle)) continue;
+            Bundle message = (Bundle) value;
+            CharSequence body = message.getCharSequence("text");
+            if (body == null || body.length() == 0) continue;
+            long time = message.getLong("time", fallbackTime);
+            if (store.captureNotification(
+                    notificationSender(message, fallbackTitle), body.toString(), time)) saved++;
+        }
+        return saved;
+    }
+
+    /**
+     * Snapshot plaintext already placed in a Messenger Notification immediately before the stock
+     * NotificationManager.notify call. This is a fallback archive only: Android notification
+     * bundles do not reliably expose Messenger message IDs, so these rows are never marked unsent.
+     */
+    public static void captureNotification(Notification notification) {
+        if (notification == null || !wouldUse("keep_unsent")) return;
+        incrementUnsentCounter(UNSENT_NOTIFICATION_HITS);
+        Context context = appContext;
+        if (context == null) return;
+        try {
+            Bundle extras = notification.extras;
+            if (extras == null) return;
+            String title = notificationText(extras,
+                "android.conversationTitle", "android.title.big", "android.title",
+                "android.hiddenConversationTitle");
+            long fallbackTime = notification.when > 0 ? notification.when : System.currentTimeMillis();
+            AntiUnsendStore store = AntiUnsendStore.get(context);
+            int saved = captureNotificationMessages(store, extras, "android.messages", title, fallbackTime);
+            saved += captureNotificationMessages(store, extras, "android.messages.historic", title, fallbackTime);
+            if (saved == 0) {
+                String body = notificationText(extras,
+                    "android.bigText", "android.text", "android.summaryText",
+                    "android.infoText", "android.subText");
+                if (body == null) {
+                    CharSequence[] lines = extras.getCharSequenceArray("android.textLines");
+                    if (lines != null) for (int i = lines.length - 1; i >= 0 && body == null; i--) {
+                        if (lines[i] != null && lines[i].length() > 0) body = lines[i].toString();
+                    }
+                }
+                if (body != null && title != null && !title.isEmpty() &&
+                        store.captureNotification(title, body, fallbackTime)) saved = 1;
+            }
+            for (int i = 0; i < saved; i++) incrementUnsentCounter(UNSENT_NOTIFICATION_SAVED);
+        } catch (RuntimeException error) {
+            hookFailedPrivately("keep_unsent", "Can't cache notification text", error);
+        }
+    }
+
+    /**
+     * Capture a plaintext snapshot as soon as a verified Messenger receive/persist hook can provide one.
+     * Phase 1 exposes this bridge without guessing an obfuscated hook. It is intentionally a no-op while
+     * Keep unsent messages is off, paused or in safe mode.
+     */
+    public static void captureIncomingMessage(String messageId, String threadId, String senderId,
+            String text, long messageTimestamp) {
+        if (messageId == null || messageId.isEmpty() || text == null || text.isEmpty() || !wouldUse("keep_unsent")) return;
+        incrementUnsentCounter(UNSENT_CAPTURE_HITS);
+        Context context = appContext;
+        if (context == null) return;
+        try {
+            AntiUnsendStore.get(context).captureText(
+                messageId, threadId, senderId, text, messageTimestamp, System.currentTimeMillis());
+            incrementUnsentCounter(UNSENT_CAPTURE_SAVED);
+        } catch (RuntimeException error) {
+            hookFailedPrivately("keep_unsent", "Can't cache incoming message text", error);
+        }
+    }
+
+    /** Render-path fallback until a verified receive/persist hook can provide sender/thread metadata. */
+    public static void captureIncomingMessage(String messageId, String text) {
+        captureIncomingMessage(messageId, null, null, text, 0);
+    }
 
     public static synchronized void recordUnsent(String messageId) {
         if (messageId == null || messageId.isEmpty() || !wouldUse("keep_unsent")) return;
+        incrementUnsentCounter(UNSENT_REVOKE_HITS);
         SharedPreferences prefs = preferences;
         if (prefs == null) return;
         Set<String> ids = new HashSet<>(prefs.getStringSet(KEPT_UNSENT_KEY, Collections.emptySet()));
         if (ids.add(messageId)) prefs.edit().putStringSet(KEPT_UNSENT_KEY, ids).apply();
+        Context context = appContext;
+        if (context != null) try {
+            AntiUnsendStore.get(context).markUnsent(messageId, System.currentTimeMillis());
+            incrementUnsentCounter(UNSENT_REVOKE_SAVED);
+        } catch (RuntimeException error) {
+            // The legacy SharedPreferences marker remains the fallback; database failure must never crash Messenger.
+            hookFailedPrivately("keep_unsent", "Can't record unsent message history", error);
+        }
         activeAt.put("keep_unsent", System.currentTimeMillis());
+    }
+
+    /** E2EE delete deltas can revoke more than one message in a single parser pass. */
+    public static void recordUnsentIds(List<?> messageIds) {
+        if (messageIds == null || messageIds.isEmpty() || !wouldUse("keep_unsent")) return;
+        for (Object value : messageIds) {
+            if (value instanceof String) recordUnsent((String) value);
+        }
     }
 
     public static boolean isKeptUnsent(String messageId) {
@@ -290,14 +454,31 @@ public final class Settings {
         return prefs.getStringSet(KEPT_UNSENT_KEY, Collections.emptySet()).contains(messageId);
     }
 
+    /** Restore cached text only for a message already observed as unsent. */
+    static String cachedUnsentText(String messageId) {
+        Context context = appContext;
+        if (context == null || messageId == null || messageId.isEmpty()) return null;
+        try {
+            return AntiUnsendStore.get(context).unsentText(messageId);
+        } catch (RuntimeException error) {
+            hookFailedPrivately("keep_unsent", "Can't restore cached unsent text", error);
+            return null;
+        }
+    }
+
+    /**
+     * Render-path fallback for builds where this getter is the earliest verified plaintext surface.
+     * Cache the text for local history, but never alter what Messenger renders.
+     */
     public static String labelKeptUnsent(String text, String messageId) {
-        if (!wouldUse("keep_unsent") || text == null) return text;
-        if (isKeptUnsent(messageId)) return "[unsent] " + text;
+        if (wouldUse("keep_unsent") && text != null && !text.isEmpty()) {
+            captureIncomingMessage(messageId, text);
+        }
         return text;
     }
 
+    /** History-only mode never changes Messenger's own unsent state. */
     public static boolean suppressUnsent(boolean original, String messageId) {
-        if (original && wouldUse("keep_unsent") && isKeptUnsent(messageId)) return false;
         return original;
     }
 

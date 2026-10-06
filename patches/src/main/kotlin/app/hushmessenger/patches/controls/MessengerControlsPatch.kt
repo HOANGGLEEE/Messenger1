@@ -32,6 +32,9 @@ internal fun Document.addSettingsEntry() {
     application.child("activity", "name" to "app.hushmessenger.extension.SettingsActivity",
         "label" to "HushMessenger settings", "exported" to "true",
         "icon" to "@android:drawable/ic_menu_preferences", "taskAffinity" to "app.hushmessenger.settings")
+    application.child("activity", "name" to "app.hushmessenger.extension.UnsentHistoryActivity",
+        "label" to "Unsent message history", "exported" to "false",
+        "theme" to "@android:style/Theme.Material.NoActionBar")
     // The app drawer entry is an alias, so settings can hide it while the shortcuts and Menu tab row keep working.
     val launcher = application.child("activity-alias", "name" to "app.hushmessenger.extension.SettingsLauncher",
         "targetActivity" to "app.hushmessenger.extension.SettingsActivity", "label" to "HushMessenger settings",
@@ -210,6 +213,32 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
                     mutableClassDefBy(original.definingClass).methods.single { it.hookId() == original.hookId() }
                 }
             }
+            // Notification snapshots are an optional fallback. They are discovered from stable Android
+            // framework calls instead of an obfuscated Messenger model class, so zero matches simply means
+            // this build has no direct post site for this fallback.
+            val notificationCaptureMethods = mutableListOf<Pair<String, String>>()
+            if (key == "keep_unsent") {
+                classDefForEach { classDef ->
+                    classDef.methods.filter { it.postsNotification() }.forEach { method ->
+                        notificationCaptureMethods.add(classDef.type to method.hookId())
+                    }
+                }
+            }
+            // The E2EE receive/delete path below is verified only for Messenger 580 variant 346013370.
+            // Other supported variants keep the established legacy behavior until their obfuscated model path is inspected.
+            val e2eeUnsend = if (key == "keep_unsent" && packageMetadata.versionCode == "346013370") {
+                val incoming = mutableClassDefBy("LX/VNn;").methods.singleOrNull { method ->
+                    method.name == "A01" && method.returnType == "LX/TmZ;" &&
+                        method.parameterTypes.getOrNull(1) == "Lcom/facebook/messaging/modularsync/models/delta/E2EEDelta;"
+                } ?: throw PatchException("Keep unsent: verified E2EE incoming hook is missing")
+                val deleting = mutableClassDefBy("LX/VtI;").methods.singleOrNull { method ->
+                    method.name == "Czd" && method.returnType == "Ljava/util/List;" && method.parameterTypes == listOf("[B")
+                } ?: throw PatchException("Keep unsent: verified E2EE delete hook is missing")
+                // Both contracts pass before any Keep-unsent method is edited.
+                incoming.validateE2eeIncomingCapture()
+                deleting.validateE2eeDeleteCapture()
+                incoming to deleting
+            } else null
             if (key == COMMUNITY_INBOX) {
                 val contract = communityInboxContract ?: throw PatchException("Messenger controls: the native community inbox route is missing")
                 val host = mutableClassDefBy(HOST_SCREENS)
@@ -231,7 +260,19 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
                 injectNativeBubbles(methods.getValue("bubbles").single(), methods.getValue("bubble_mode").single(),
                     capability, nativeBubbleRoutesVerified)
                 nativeRoutesApplied = nativeBubbleRoutesVerified
-            } else injectControl(key, methods)
+            } else {
+                injectControl(key, methods)
+                e2eeUnsend?.let { (incoming, deleting) ->
+                    incoming.injectE2eeIncomingCapture()
+                    deleting.injectE2eeDeleteCapture()
+                }
+                if (key == "keep_unsent") {
+                    notificationCaptureMethods.forEach { (className, methodId) ->
+                        mutableClassDefBy(className).methods.single { it.hookId() == methodId }
+                            .injectNotificationCapture()
+                    }
+                }
+            }
             recordControl(key)
             applied = true
         }
@@ -292,7 +333,7 @@ val allowScreenshotPatch = controlPatch("allow_screenshot", "Allow screenshots",
 @Suppress("unused")
 val hideReadReceiptsPatch = controlPatch("hide_read_receipts", "Hide read receipts", "Stops sending read receipts. Opened encrypted chats can stay unread on this phone. Replying or switching this off may notify the sender. Group coverage isn't verified.", "Privacy", "hide_read_receipts", "read_mailbox")
 @Suppress("unused")
-val keepUnsentPatch = controlPatch("keep_unsent", "Keep unsent messages", "Preserves messages on verified legacy unsend routes. End-to-end encrypted chats are unsupported, and group coverage is unverified. Activity records intercepted legacy unsends, not chat support. Your own unsend may be limited.", "Privacy", "keep_unsent", "unsent_indicator", "delta_unsent")
+val keepUnsentPatch = controlPatch("keep_unsent", "Unsent message history", "Saves a private local text snapshot when a verified receive or render route exposes it, then marks that local record when Messenger reports an unsend. Messenger's own unsend behavior is left unchanged. It also keeps up to 30 recent notification-text snapshots as a fallback; those fallback rows are not called unsent because Android notifications do not reliably expose Messenger message IDs. Messenger 580 variant 346013370 has a verified E2EE receive/revoke path; other E2EE builds, media attachments and group coverage are not yet verified.", "Privacy", "keep_unsent", "unsent_indicator")
 private var anonymousStoriesApplied = false
 
 private val anonymousStoriesResources = resourcePatch(description = "Record HushMessenger capability: anonymous_stories") {

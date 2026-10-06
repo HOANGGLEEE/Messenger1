@@ -20,6 +20,7 @@ import com.android.tools.smali.dexlib2.iface.Method
 import com.android.tools.smali.dexlib2.iface.instruction.Instruction
 import com.android.tools.smali.dexlib2.iface.instruction.NarrowLiteralInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
+import com.android.tools.smali.dexlib2.iface.instruction.RegisterRangeInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.WideLiteralInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.FiveRegisterInstruction
@@ -1088,6 +1089,151 @@ internal fun MutableMethod.injectMenuFolderClick(folderItemType: String) {
     """.trimIndent())
 }
 
+private val NOTIFICATION_POST_METHODS = setOf(
+    "Landroid/app/NotificationManager;->notify(ILandroid/app/Notification;)V",
+    "Landroid/app/NotificationManager;->notify(Ljava/lang/String;ILandroid/app/Notification;)V",
+)
+
+private fun Instruction.notificationArgumentRegister(): Int? {
+    val reference = (this as? ReferenceInstruction)?.reference?.toString() ?: return null
+    if (reference !in NOTIFICATION_POST_METHODS) return null
+    return when (this) {
+        is FiveRegisterInstruction -> {
+            val registers = intArrayOf(registerC, registerD, registerE, registerF, registerG)
+            if (registerCount in 1..registers.size) registers[registerCount - 1] else null
+        }
+        is RegisterRangeInstruction -> if (registerCount > 0) startRegister + registerCount - 1 else null
+        else -> null
+    }
+}
+
+/** Direct Android notification posts are a local fallback when no verified message-model receive hook exists. */
+internal fun Method.postsNotification(): Boolean =
+    implementation?.instructions?.any { it.notificationArgumentRegister() != null } == true
+
+/**
+ * Copy the Notification object immediately before Messenger posts it. The helper only snapshots
+ * plaintext already present in the app process and never changes or suppresses the stock notify call.
+ */
+internal fun MutableMethod.injectNotificationCapture(): Int {
+    val sites = implementation?.instructions?.toList()?.mapIndexedNotNull { index, instruction ->
+        instruction.notificationArgumentRegister()?.let { index to it }
+    }.orEmpty()
+    for ((index, register) in sites.asReversed()) {
+        addInstructions(index,
+            "invoke-static/range {v$register .. v$register}, $SETTINGS->captureNotification(Landroid/app/Notification;)V")
+    }
+    return sites.size
+}
+
+private const val E2EE_DELTA = "Lcom/facebook/messaging/modularsync/models/delta/E2EEDelta;"
+private const val E2EE_REVOKE_MESSAGE =
+    "Lcom/facebook/xapp/messaging/modularsync/e2ee/model/protobuf/ConsumerApplicationOuterClass\$ConsumerApplication\$RevokeMessage;"
+private const val E2EE_MESSAGE_KEY =
+    "Lcom/facebook/xapp/messaging/modularsync/e2ee/model/protobuf/Common\$MessageKey;"
+private const val E2EE_REVOKE_KEY = "$E2EE_REVOKE_MESSAGE->key_:$E2EE_MESSAGE_KEY"
+private const val E2EE_MESSAGE_KEY_ID = "$E2EE_MESSAGE_KEY->id_:Ljava/lang/String;"
+private const val E2EE_TEXT_CONTENT =
+    "Lcom/facebook/xapp/messaging/modularsync/message/models/protobuf/AppMessageModelFragmentProto\$AppMessageContentFBMessageTextContent;"
+
+/**
+ * Messenger 580 variant 346013370 builds a plaintext TmZ here after its E2EE payload has already been decrypted.
+ * The exact shape is pinned because the helper classes below are obfuscated and must never be guessed on another build.
+ */
+internal fun MutableMethod.validateE2eeIncomingCapture(): Int {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: E2EE incoming hook has no code")
+    val strings = code.mapNotNull { ((it as? ReferenceInstruction)?.reference as? StringReference)?.string }.toSet()
+    val returnIndex = code.indexOfLast { it.opcode == Opcode.RETURN_OBJECT }
+    val result = code.getOrNull(returnIndex) as? OneRegisterInstruction
+    if (definingClass != "LX/VNn;" || name != "A01" || returnType != "LX/TmZ;" ||
+        !AccessFlags.STATIC.isSet(accessFlags) || parameterTypes.size != 11 ||
+        parameterTypes.getOrNull(1) != E2EE_DELTA || implementation!!.registerCount != 29 ||
+        returnIndex != code.lastIndex || result?.registerA != 0 ||
+        !strings.containsAll(setOf("client__e2ee_payload_type", "client__e2ee_placeholder_type",
+            "client__e2ee_local_data_id", "replied_to_message_id"))) {
+        throw PatchException("Messenger controls: verified E2EE incoming-message hook changed")
+    }
+    return returnIndex
+}
+
+internal fun MutableMethod.injectE2eeIncomingCapture() {
+    val returnIndex = validateE2eeIncomingCapture()
+    addInstructionsWithLabels(returnIndex, """
+        invoke-static {}, $SETTINGS->keepUnsent()Z
+        move-result v1
+        if-eqz v1, :hush_e2ee_capture_done
+        invoke-virtual {v0}, LX/TmZ;->A0H()Ljava/lang/String;
+        move-result-object v1
+        iget-object v2, v0, LX/TOF;->A00:LX/TOE;
+        invoke-virtual {v2}, LX/TOE;->A0x()Ljava/lang/String;
+        move-result-object v2
+        invoke-virtual {v0}, LX/TmZ;->A0J()Ljava/lang/String;
+        move-result-object v3
+        invoke-virtual {v0}, LX/TmZ;->A0A()LX/TmX;
+        move-result-object v4
+        if-eqz v4, :hush_e2ee_capture_done
+        invoke-virtual {v4}, LX/TmX;->A01()LX/TmY;
+        move-result-object v4
+        if-eqz v4, :hush_e2ee_capture_done
+        invoke-virtual {v4}, LX/TmY;->A07()LX/TmS;
+        move-result-object v4
+        if-eqz v4, :hush_e2ee_capture_done
+        invoke-static {}, $E2EE_TEXT_CONTENT->newBuilder()LX/UOB;
+        move-result-object v5
+        invoke-static {v4, v5}, LX/TS6;->A0V(LX/TOF;Ljava/lang/Object;)Ljava/lang/String;
+        move-result-object v4
+        iget-wide v5, p1, $E2EE_DELTA->A02:J
+        invoke-static/range {v1 .. v6}, $SETTINGS->captureIncomingMessage(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V
+    """.trimIndent(), ExternalLabel("hush_e2ee_capture_done", getInstruction(returnIndex)))
+}
+
+/**
+ * ConsumerApplication.RevokeMessage is Messenger's explicit E2EE unsend route. It names the
+ * revoked message through MessageKey.id immediately before Messenger builds a TmZ with
+ * is_unsent + unsent_timestamp_ms. Pin that exact sequence instead of treating every generic
+ * DeleteMessageClientDelta as an unsend.
+ */
+internal fun MutableMethod.validateE2eeDeleteCapture(): Pair<Int, Int> {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: E2EE revoke hook has no code")
+    val strings = code.mapNotNull { ((it as? ReferenceInstruction)?.reference as? StringReference)?.string }.toSet()
+    val revokeSites = code.indices.filter { index ->
+        val instruction = code[index]
+        instruction.opcode == Opcode.IGET_OBJECT &&
+            (instruction as? ReferenceInstruction)?.reference.toString() == E2EE_REVOKE_KEY
+    }
+    val matches = revokeSites.mapNotNull { revoke ->
+        val id = (revoke + 1..minOf(revoke + 6, code.lastIndex)).firstOrNull { index ->
+            val instruction = code[index]
+            instruction.opcode == Opcode.IGET_OBJECT &&
+                (instruction as? ReferenceInstruction)?.reference.toString() == E2EE_MESSAGE_KEY_ID
+        } ?: return@mapNotNull null
+        val register = (code[id] as? TwoRegisterInstruction)?.registerA ?: return@mapNotNull null
+        if (register > 15) return@mapNotNull null
+        val tail = code.subList(id + 1, minOf(id + 45, code.size))
+        val tailStrings = tail.mapNotNull {
+            ((it as? ReferenceInstruction)?.reference as? StringReference)?.string
+        }.toSet()
+        if (!tailStrings.containsAll(setOf("is_unsent", "unsent_timestamp_ms"))) return@mapNotNull null
+        id to register
+    }
+    val match = matches.singleOrNull()
+        ?: throw PatchException("Messenger controls: verified E2EE RevokeMessage route changed")
+    if (definingClass != "LX/VtI;" || name != "Czd" || returnType != "Ljava/util/List;" ||
+        parameterTypes != listOf("[B") || AccessFlags.STATIC.isSet(accessFlags) ||
+        "is_unsent" !in strings || "unsent_timestamp_ms" !in strings) {
+        throw PatchException("Messenger controls: verified E2EE revoke hook changed")
+    }
+    return match
+}
+
+internal fun MutableMethod.injectE2eeDeleteCapture() {
+    val (index, messageId) = validateE2eeDeleteCapture()
+    addInstructions(index + 1,
+        "invoke-static {v$messageId}, $SETTINGS->recordUnsent(Ljava/lang/String;)V")
+}
+
 internal fun MutableMethod.validateKeepUnsent() {
     validateScratch()
     if (returnType != "V") throw PatchException("Messenger controls: keep_unsent hook must return void")
@@ -1105,7 +1251,6 @@ internal fun MutableMethod.injectKeepUnsent() {
         invoke-virtual {p1, v0}, Landroid/content/Intent;->getStringExtra(Ljava/lang/String;)Ljava/lang/String;
         move-result-object v0
         invoke-static {v0}, $SETTINGS->recordUnsent(Ljava/lang/String;)V
-        return-void
     """.trimIndent(), ExternalLabel("stock_behavior", getInstruction(0)))
 }
 
