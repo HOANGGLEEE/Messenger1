@@ -1234,6 +1234,111 @@ internal fun MutableMethod.injectE2eeDeleteCapture() {
         "invoke-static {v$messageId}, $SETTINGS->recordUnsent(Ljava/lang/String;)V")
 }
 
+/**
+ * Messenger 581 converts the message-model fragment into QPL after the encrypted payload has
+ * been materialized. This model carries stable message/thread IDs, unsent state and image metadata.
+ */
+internal fun MutableMethod.validateMessageModelCapture(): Int {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: message-model capture hook has no code")
+    val strings = code.mapNotNull {
+        ((it as? ReferenceInstruction)?.reference as? StringReference)?.string
+    }.toSet()
+    val returnIndex = code.indexOfLast { it.opcode == Opcode.RETURN_OBJECT }
+    val result = code.getOrNull(returnIndex) as? OneRegisterInstruction
+    if (definingClass != "LX/WXH;" || name != "A0V" || returnType != "LX/QPL;" ||
+        !AccessFlags.STATIC.isSet(accessFlags) || parameterTypes != listOf("[B") ||
+        implementation!!.registerCount != 19 || returnIndex != code.lastIndex ||
+        result?.registerA != 0 ||
+        !strings.containsAll(setOf("message_id", "thread_key", "is_unsent", "unsent_timestamp_ms"))) {
+        throw PatchException("Messenger controls: verified Messenger 581 message-model parser changed")
+    }
+    return returnIndex
+}
+
+internal fun MutableMethod.injectMessageModelCapture() {
+    val returnIndex = validateMessageModelCapture()
+    addInstructions(returnIndex,
+        "invoke-static {v0}, $SETTINGS->captureIncomingQpl(Ljava/lang/Object;)V")
+}
+
+/**
+ * Validate the generated image converter that exposes the main E2EE direct path and media-key
+ * timestamp. Preview paths are deliberately not used as substitutes for the original image.
+ */
+internal fun MutableMethod.validateMessageImageMetadata() {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: image metadata converter has no code")
+    val strings = code.mapNotNull {
+        ((it as? ReferenceInstruction)?.reference as? StringReference)?.string
+    }.toSet()
+    val fields = code.mapNotNull {
+        ((it as? ReferenceInstruction)?.reference as? FieldReference)
+    }
+    if (definingClass != "LX/WXH;" || name != "A07" || returnType != "LX/QSD;" ||
+        parameterTypes.singleOrNull()?.contains("AppMessageContentFBMessageImagesContentImages") != true ||
+        "client__e2ee_direct_path_mime_type" !in strings ||
+        "client__e2ee_preview_direct_path" !in strings ||
+        fields.none { it.name == "clientE2EeDirectPath_" } ||
+        fields.none { it.name == "clientE2EeMediaKeyTimestamp_" }) {
+        throw PatchException("Messenger controls: verified Messenger 581 image metadata converter changed")
+    }
+}
+
+/**
+ * ArmadilloMediaDownloader completes the local file before invoking this callback. The metadata
+ * object supplies direct_path, mime_type and media_key_timestamp; the temporary file is copied
+ * before Messenger's callback path can delete it.
+ */
+internal fun MutableMethod.validateDownloadedImageCapture(): Int {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: downloaded-image callback has no code")
+    val references = code.mapNotNull {
+        (it as? ReferenceInstruction)?.reference?.toString()
+    }.toSet()
+    val fileResult = code.indices.singleOrNull { index ->
+        val instruction = code[index]
+        instruction.opcode == Opcode.MOVE_RESULT_OBJECT &&
+            (instruction as? OneRegisterInstruction)?.registerA == 19 &&
+            index > 0 && code[index - 1].opcode == Opcode.INVOKE_STATIC &&
+            (code[index - 1] as? ReferenceInstruction)?.reference?.toString() ==
+                "LX/001;->A0F(Ljava/lang/String;)Ljava/io/File;"
+    }
+    if (definingClass != "LX/SUm;" || name != "onCompletion" || returnType != "V" ||
+        parameterTypes != listOf("Ljava/lang/Object;") || implementation!!.registerCount != 26 ||
+        fileResult == null ||
+        "LX/SUm;->A07:LX/8uu;" !in references ||
+        "Ljava/io/File;->exists()Z" !in references ||
+        "Ljava/io/File;->canRead()Z" !in references ||
+        "Ljava/io/File;->length()J" !in references ||
+        "Ljava/io/File;->delete()Z" !in references) {
+        throw PatchException("Messenger controls: verified Messenger 581 downloaded-image callback changed")
+    }
+    return fileResult
+}
+
+internal fun MutableMethod.injectDownloadedImageCapture() {
+    val fileResult = validateDownloadedImageCapture()
+    addInstructionsWithLabels(fileResult + 1, """
+        invoke-static {}, $SETTINGS->keepUnsent()Z
+        move-result v0
+        if-eqz v0, :hush_581_image_capture_done
+        if-eqz v19, :hush_581_image_capture_done
+        if-eqz v4, :hush_581_image_capture_done
+        move-object v11, v1
+        move-object v12, v5
+        iget-object v0, v4, LX/8uu;->A07:Ljava/lang/String;
+        iget-object v1, v4, LX/8uu;->A06:Ljava/lang/String;
+        iget-wide v2, v4, LX/8uu;->A03:J
+        invoke-virtual {v19}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
+        move-result-object v5
+        invoke-static {v0, v1, v2, v3, v5}, $SETTINGS->captureDownloadedImage(Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;)V
+        move-object v1, v11
+        move-object v5, v12
+        :hush_581_image_capture_done
+    """.trimIndent())
+}
+
 internal fun MutableMethod.validateKeepUnsent() {
     validateScratch()
     if (returnType != "V") throw PatchException("Messenger controls: keep_unsent hook must return void")
