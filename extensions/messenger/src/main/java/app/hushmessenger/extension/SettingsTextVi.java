@@ -132,7 +132,7 @@ final class SettingsTextVi {
         {"unsent_not_active", "Chưa ghi nhận hoạt động thu hồi tin nhắn kể từ lần khởi động lại"},
         {"unsent_history_title", "Lịch sử tin nhắn đã thu hồi"},
         {"unsent_history_entry_help", "Xem các tin nhắn đã được lưu cục bộ trên thiết bị này và sau đó được Messenger báo là đã thu hồi."},
-        {"unsent_history_help", "Chỉ lưu trên thiết bị này. Mục khớp chính xác dùng ID tin nhắn của Messenger. Ảnh đính kèm thông thường được sao chép sau khi Messenger tải xong. Mục dự phòng từ thông báo giữ lại nội dung thông báo gần đây nhưng không gọi là đã thu hồi vì thông báo Android không luôn có ID đó."},
+        {"unsent_history_help", "Chỉ lưu trên thiết bị này. Mục khớp chính xác dùng ID tin nhắn của Messenger. Ảnh đính kèm E2EE được hỗ trợ sẽ được sao chép sau khi Messenger tải xong. Mục dự phòng từ thông báo giữ lại nội dung thông báo gần đây nhưng không gọi là đã thu hồi vì thông báo Android không luôn có ID đó."},
         {"unsent_history_diagnostics", "Hook nhận tin: %d, đã lưu: %d • Hook thu hồi: %d, đã đánh dấu: %d"},
         {"unsent_history_notification_diagnostics", "Dự phòng thông báo: %d lần hook, %d bản mới"},
         {"unsent_history_media_diagnostics", "Lưu ảnh: %d lần callback, %d ảnh đã lưu cục bộ"},
