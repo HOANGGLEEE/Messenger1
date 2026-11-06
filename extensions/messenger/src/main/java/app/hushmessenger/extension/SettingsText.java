@@ -219,7 +219,7 @@ final class SettingsText {
         ENGLISH.put("unsent_history_clear_failed", "Couldn't clear unsent history.");
         ENGLISH.put("unsent_history_read_failed", "Couldn't read unsent history.");
         ENGLISH.put("unsent_history_empty", "No unsent messages have been recorded yet.");
-        ENGLISH.put("unsent_history_missing_text", "Content wasn't captured before this message was unsent.");
+        ENGLISH.put("unsent_history_missing_text", "Text wasn't captured before this message was unsent.");
         ENGLISH.put("unsent_history_unknown_sender", "Unknown sender");
         ENGLISH.put("unsent_history_sender", "Sender: %s");
         ENGLISH.put("unsent_history_received_at", "Received %s");
