@@ -565,8 +565,11 @@ public final class Settings {
             String extension = imageExtension(mimeType);
             File destination = new File(directory, key + "." + extension);
             if (destination.isFile() && destination.length() > 0) {
+                String destinationPath = destination.getAbsolutePath();
+                boolean alreadyLinked = destinationPath.equals(
+                    store.mediaLocalPath(directPath, mediaKeyTimestamp));
                 if (store.saveMediaFile(directPath, mediaKeyTimestamp,
-                        destination.getAbsolutePath(), System.currentTimeMillis())) {
+                        destinationPath, System.currentTimeMillis()) && !alreadyLinked) {
                     incrementUnsentCounter(UNSENT_MEDIA_SAVED);
                 }
                 return;
