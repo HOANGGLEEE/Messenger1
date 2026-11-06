@@ -59,36 +59,43 @@ public class AntiUnsendStoreTest {
         assertEquals("normal", store.unsentText("normal"));
     }
 
-    @Test public void imageMetadataCanBeLinkedToARevokedMessage() {
-        store.captureMediaMetadata("/cdn/image/abc", "thread-1", 900, "image/jpeg", 100);
-        assertTrue(store.listUnsentMedia("m1").isEmpty());
-
-        store.captureMessageMetadata("m1", "thread-1", "sender-1", 900, 110);
+    @Test public void imageMetadataLinksByDirectPathAndMediaKeyTimestamp() {
+        store.captureMediaMetadata("/cdn/image/abc", 900, "image/jpeg", 100);
+        store.captureMessageMetadata("m1", "thread-1", "sender-1", 800, 110);
+        store.captureMediaMetadataForMessage("/cdn/image/abc", "m1", "thread-1",
+            900, "image/jpeg", 115);
         store.markUnsent("m1", 120);
 
-        // A completed-download callback records the private copy path.
-        assertTrue(store.saveMediaFile("/cdn/image/abc", "thread-1", 900,
-            "/private/hush/media/m1.jpg", 130));
-        var images = store.listUnsentMedia("m1");
-        assertEquals(1, images.size());
-        assertEquals("image/jpeg", images.get(0).mimeType);
-        assertEquals("/private/hush/media/m1.jpg", images.get(0).localPath);
-        assertEquals(900, images.get(0).messageTimestamp);
-        assertEquals(120, images.get(0).unsentAt);
-    }
-
-    @Test public void imageArrivingAfterRevokeInheritsTheUnsentMarker() {
-        store.captureMessageMetadata("m2", "thread-2", "sender-2", 1234, 100);
-        store.markUnsent("m2", 110);
-        store.captureMediaMetadata("/cdn/image/xyz", "thread-2", 1234, "image/png", 120);
-
-        java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(), "late-image.png");
+        java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(), "m1.jpg");
         try {
             assertTrue(image.createNewFile());
-            assertTrue(store.saveMediaFile("/cdn/image/xyz", "thread-2", 1234, image.getAbsolutePath(), 130));
+            assertTrue(store.saveMediaFile("/cdn/image/abc", 900, image.getAbsolutePath(), 130));
+            var images = store.listUnsentMedia("m1");
+            assertEquals(1, images.size());
+            assertEquals("image/jpeg", images.get(0).mimeType);
+            assertEquals(image.getAbsolutePath(), images.get(0).localPath);
+            assertEquals(900, images.get(0).messageTimestamp);
+            assertEquals(120, images.get(0).unsentAt);
+        } catch (java.io.IOException error) {
+            fail(error.getMessage());
+        } finally {
+            image.delete();
+        }
+    }
+
+    @Test public void downloadCallbackCanSaveImageBeforeMessageModelArrives() {
+        store.captureMediaMetadata("/cdn/image/late-model", 1234, "image/png", 100);
+        java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(), "late-model.png");
+        try {
+            assertTrue(image.createNewFile());
+            assertTrue(store.saveMediaFile("/cdn/image/late-model", 1234, image.getAbsolutePath(), 110));
+            store.captureMessageMetadata("m2", "thread-2", "sender-2", 1500, 120);
+            store.captureMediaMetadataForMessage("/cdn/image/late-model", "m2", "thread-2",
+                1234, "image/png", 130);
+            store.markUnsent("m2", 140);
             var entries = store.listUnsentMedia("m2");
             assertEquals(1, entries.size());
-            assertEquals(110, entries.get(0).unsentAt);
+            assertEquals(140, entries.get(0).unsentAt);
             assertEquals(image.getAbsolutePath(), entries.get(0).localPath);
         } catch (java.io.IOException error) {
             fail(error.getMessage());
@@ -97,42 +104,66 @@ public class AntiUnsendStoreTest {
         }
     }
 
-    @Test public void ambiguousThreadTimestampDoesNotAttachImageToWrongMessage() {
-        store.captureMessageMetadata("m3", "thread-3", "sender-1", 5678, 100);
-        store.captureMessageMetadata("m4", "thread-3", "sender-2", 5678, 101);
+    @Test public void imageMetadataAlreadyMarkedUnsentIsLinkedToExactMessage() {
+        store.captureMessageMetadata("m3", "thread-3", "sender-3", 3000, 100);
         store.markUnsent("m3", 110);
-        store.markUnsent("m4", 111);
-        store.captureMediaMetadata("/cdn/image/ambiguous", "thread-3", 5678, "image/jpeg", 120);
-
-        assertTrue(store.listUnsentMedia("m3").isEmpty());
-        assertTrue(store.listUnsentMedia("m4").isEmpty());
+        store.captureMediaMetadataForMessage("/cdn/image/already-unsent", "m3", "thread-3",
+            7777, "image/jpeg", 120);
+        java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(), "already-unsent.jpg");
+        try {
+            assertTrue(image.createNewFile());
+            assertTrue(store.saveMediaFile("/cdn/image/already-unsent", 7777, image.getAbsolutePath(), 130));
+            var entries = store.listUnsentMedia("m3");
+            assertEquals(1, entries.size());
+            assertEquals(110, entries.get(0).unsentAt);
+        } catch (java.io.IOException error) {
+            fail(error.getMessage());
+        } finally {
+            image.delete();
+        }
     }
 
-    @Test public void laterTimestampCollisionDetachesAnEarlierInferredImageLink() {
-        store.captureMediaMetadata("/cdn/image/late-collision", "thread-4", 7777, "image/jpeg", 90);
-        store.captureMessageMetadata("m6", "thread-4", "sender-1", 7777, 100);
-        store.markUnsent("m6", 110);
-        assertEquals(1, store.listUnsentMedia("m6").size());
+    @Test public void sameMediaIdentityCannotBeLinkedToTwoDifferentMessages() {
+        store.captureMediaMetadataForMessage("/cdn/image/collision", "m4", "thread-4",
+            4444, "image/jpeg", 100);
+        store.captureMediaMetadataForMessage("/cdn/image/collision", "m5", "thread-5",
+            4444, "image/jpeg", 110);
+        store.markUnsent("m4", 120);
+        store.markUnsent("m5", 130);
+        assertTrue(store.listUnsentMedia("m4").isEmpty());
+        assertTrue(store.listUnsentMedia("m5").isEmpty());
+    }
 
-        // A second message with the same timestamp makes the earlier inferred link ambiguous.
-        store.captureMessageMetadata("m7", "thread-4", "sender-2", 7777, 120);
-        assertTrue(store.listUnsentMedia("m6").isEmpty());
-        store.markUnsent("m7", 130);
-        assertTrue(store.listUnsentMedia("m7").isEmpty());
+    @Test public void mediaIdentityDoesNotDependOnThreadKey() {
+        store.captureMediaMetadataForMessage("/cdn/image/thread-independent", "m6", "thread-6",
+            6666, "image/webp", 100);
+        java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(), "thread-independent.webp");
+        try {
+            assertTrue(image.createNewFile());
+            // The completed-download callback has no thread key, but it must update the same row.
+            assertTrue(store.saveMediaFile("/cdn/image/thread-independent", 6666, image.getAbsolutePath(), 110));
+            store.markUnsent("m6", 120);
+            assertEquals(1, store.listUnsentMedia("m6").size());
+        } catch (java.io.IOException error) {
+            fail(error.getMessage());
+        } finally {
+            image.delete();
+        }
     }
 
     @Test public void clearingUnsentHistoryDeletesItsPrivateImageFiles() {
-        store.captureMediaMetadata("/cdn/image/delete-me", "thread-5", 999, "image/jpeg", 100);
-        store.captureMessageMetadata("m5", "thread-5", "sender-5", 999, 101);
+        store.captureMessageMetadata("m7", "thread-7", "sender-7", 999, 100);
+        store.captureMediaMetadataForMessage("/cdn/image/delete-me", "m7", "thread-7",
+            9999, "image/jpeg", 101);
         java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(), "unsent-image.jpg");
         try {
             assertTrue(image.createNewFile());
-            assertTrue(store.saveMediaFile("/cdn/image/delete-me", "thread-5", 999, image.getAbsolutePath(), 102));
-            store.markUnsent("m5", 103);
+            assertTrue(store.saveMediaFile("/cdn/image/delete-me", 9999, image.getAbsolutePath(), 102));
+            store.markUnsent("m7", 103);
             assertTrue(image.exists());
             assertEquals(1, store.clearUnsentHistory());
             assertFalse(image.exists());
-            assertTrue(store.listUnsentMedia("m5").isEmpty());
+            assertTrue(store.listUnsentMedia("m7").isEmpty());
         } catch (java.io.IOException error) {
             fail(error.getMessage());
         } finally {
@@ -143,8 +174,9 @@ public class AntiUnsendStoreTest {
     @Test public void retentionPrunesOldSnapshotsAndTheirImageFiles() {
         long now = 40L * 24 * 60 * 60 * 1000;
         store.captureText("old", null, null, "old", 0, 1);
-        store.captureMediaMetadata("/cdn/image/old", "thread-old", 10, "image/jpeg", 1);
         store.captureMessageMetadata("old", "thread-old", "sender-old", 10, 1);
+        store.captureMediaMetadataForMessage("/cdn/image/old", "old", "thread-old",
+            1010, "image/jpeg", 1);
         store.captureText("new", null, null, "new", 0, now);
         store.markUnsent("old", 2);
         store.markUnsent("new", now);
@@ -152,7 +184,7 @@ public class AntiUnsendStoreTest {
         java.io.File oldImage = new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(), "expired-image.jpg");
         try {
             assertTrue(oldImage.createNewFile());
-            assertTrue(store.saveMediaFile("/cdn/image/old", "thread-old", 10, oldImage.getAbsolutePath(), 2));
+            assertTrue(store.saveMediaFile("/cdn/image/old", 1010, oldImage.getAbsolutePath(), 2));
             store.pruneNow(now);
             var entries = store.listUnsent(10);
             assertEquals(1, entries.size());
