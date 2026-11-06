@@ -443,6 +443,7 @@ public final class Settings {
      */
     private static final int MESSAGE_MODEL_TEXT = 0x0036452d;
     private static final int MESSAGE_MODEL_IS_UNSENT = 0xe9939666;
+    private static final int MESSAGE_MODEL_UNSENT_TIMESTAMP = 0x8695313d;
     private static final int MESSAGE_MODEL_DIRECT_PATH = 0xbb595234;
     private static final int MESSAGE_MODEL_DIRECT_PATH_MIME = 0x3b60c01a;
     private static final int MESSAGE_MODEL_MEDIA_KEY_TIMESTAMP = 0xf3017894;
@@ -530,7 +531,9 @@ public final class Settings {
 
         Object unsentValue = readMessageModelValue(qpl, "Akp", MESSAGE_MODEL_IS_UNSENT);
         if (Boolean.TRUE.equals(unsentValue) && !isKeptUnsent(messageId)) {
-            recordUnsent(messageId);
+            Object rawUnsentAt = readMessageModelValue(qpl, "Akr", MESSAGE_MODEL_UNSENT_TIMESTAMP);
+            long unsentAt = rawUnsentAt instanceof Number ? ((Number) rawUnsentAt).longValue() : 0;
+            recordUnsent(messageId, unsentAt);
         }
     }
 
@@ -628,7 +631,12 @@ public final class Settings {
     }
 
     public static synchronized void recordUnsent(String messageId) {
+        recordUnsent(messageId, System.currentTimeMillis());
+    }
+
+    public static synchronized void recordUnsent(String messageId, long unsentAt) {
         if (messageId == null || messageId.isEmpty() || !wouldUse("keep_unsent")) return;
+        long eventTime = unsentAt > 0 ? unsentAt : System.currentTimeMillis();
         incrementUnsentCounter(UNSENT_REVOKE_HITS);
         SharedPreferences prefs = preferences;
         if (prefs == null) return;
@@ -636,7 +644,7 @@ public final class Settings {
         if (ids.add(messageId)) prefs.edit().putStringSet(KEPT_UNSENT_KEY, ids).apply();
         Context context = appContext;
         if (context != null) try {
-            AntiUnsendStore.get(context).markUnsent(messageId, System.currentTimeMillis());
+            AntiUnsendStore.get(context).markUnsent(messageId, eventTime);
             incrementUnsentCounter(UNSENT_REVOKE_SAVED);
         } catch (RuntimeException error) {
             // The legacy SharedPreferences marker remains the fallback; database failure must never crash Messenger.
