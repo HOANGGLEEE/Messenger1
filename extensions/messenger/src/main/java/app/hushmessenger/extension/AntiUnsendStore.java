@@ -47,16 +47,16 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         final String messageId;
         final String mimeType;
         final String localPath;
-        final long messageTimestamp;
+        final long mediaKeyTimestamp;
         final long receivedAt;
         final long unsentAt;
 
         MediaEntry(String messageId, String mimeType, String localPath,
-                long messageTimestamp, long receivedAt, long unsentAt) {
+                long mediaKeyTimestamp, long receivedAt, long unsentAt) {
             this.messageId = messageId;
             this.mimeType = mimeType;
             this.localPath = localPath;
-            this.messageTimestamp = messageTimestamp;
+            this.mediaKeyTimestamp = mediaKeyTimestamp;
             this.receivedAt = receivedAt;
             this.unsentAt = unsentAt;
         }
