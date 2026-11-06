@@ -74,7 +74,7 @@ public class AntiUnsendStoreTest {
             assertEquals(1, images.size());
             assertEquals("image/jpeg", images.get(0).mimeType);
             assertEquals(image.getAbsolutePath(), images.get(0).localPath);
-            assertEquals(900, images.get(0).messageTimestamp);
+            assertEquals(900, images.get(0).mediaKeyTimestamp);
             assertEquals(120, images.get(0).unsentAt);
         } catch (java.io.IOException error) {
             fail(error.getMessage());
