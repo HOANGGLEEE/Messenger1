@@ -625,7 +625,7 @@ public final class Settings {
         return "img";
     }
 
-    /** Render-path fallback until a verified receive/persist hook can provide sender/thread metadata. */
+    /** Compatibility fallback for older hooks that expose only a message ID and rendered text. */
     public static void captureIncomingMessage(String messageId, String text) {
         captureIncomingMessage(messageId, null, null, text, 0);
     }
