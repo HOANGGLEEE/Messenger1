@@ -224,8 +224,8 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
                     }
                 }
             }
-            // The E2EE receive/delete path below is verified only for Messenger 580 variant 346013370.
-            // Other supported variants keep the established legacy behavior until their obfuscated model path is inspected.
+            // Messenger 580 uses its verified E2EE receive/delete path. Messenger 581 has its own
+            // QPL message-model and Armadillo media-completion contracts, validated below.
             val e2eeUnsend = if (key == "keep_unsent" && packageMetadata.versionCode == "346013370") {
                 val incoming = mutableClassDefBy("LX/VNn;").methods.singleOrNull { method ->
                     method.name == "A01" && method.returnType == "LX/TmZ;" &&
@@ -238,6 +238,58 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
                 incoming.validateE2eeIncomingCapture()
                 deleting.validateE2eeDeleteCapture()
                 incoming to deleting
+            } else null
+            // Messenger 581 uses a newer QPL message-model route and a separate Armadillo media
+            // completion callback. Validate the complete reflection/metadata contract before editing.
+            val messenger581MessageCapture = if (key == "keep_unsent" && packageMetadata.versionCode == "346213510") {
+                val modelClass = mutableClassDefBy("LX/WXH;")
+                val parser = modelClass.methods.singleOrNull { method ->
+                    method.name == "A0V" && method.returnType == "LX/QPL;" &&
+                        method.parameterTypes == listOf("[B")
+                } ?: throw PatchException("Keep unsent: Messenger 581 message-model parser is missing")
+                val imageConverter = modelClass.methods.singleOrNull { method ->
+                    method.name == "A07" && method.returnType == "LX/QSD;" &&
+                        method.parameterTypes == listOf("Lcom/facebook/xapp/messaging/modularsync/message/models/protobuf/AppMessageModelFragmentProto\$AppMessageContentFBMessageImagesContentImages;")
+                } ?: throw PatchException("Keep unsent: Messenger 581 image metadata converter is missing")
+                parser.validateMessageModelCapture()
+                imageConverter.validateMessageImageMetadata()
+
+                fun requireMethod(owner: String, name: String, parameters: List<String>, result: String) {
+                    if (mutableClassDefBy(owner).methods.none { it.name == name &&
+                            it.parameterTypes == parameters && it.returnType == result }) {
+                        throw PatchException("Keep unsent: Messenger 581 model accessor $owner->$name is missing")
+                    }
+                }
+                requireMethod("LX/QPL;", "A0I", emptyList(), "Ljava/lang/String;")
+                requireMethod("LX/QPL;", "A0K", emptyList(), "Ljava/lang/String;")
+                requireMethod("LX/QPL;", "A0L", emptyList(), "Ljava/lang/String;")
+                requireMethod("LX/QPL;", "A0M", emptyList(), "Ljava/lang/String;")
+                requireMethod("LX/QPL;", "A0B", emptyList(), "LX/QPJ;")
+                requireMethod("LX/QPJ;", "A01", emptyList(), "LX/QPK;")
+                requireMethod("LX/QPK;", "A03", emptyList(), "LX/QOm;")
+                requireMethod("LX/QOm;", "A00", emptyList(), "Lcom/google/common/collect/ImmutableList;")
+                requireMethod("LX/Q1b;", "BOa", listOf("I"), "Ljava/lang/String;")
+                requireMethod("LX/Q1b;", "Akp", listOf("I"), "Z")
+                requireMethod("LX/Q1b;", "Akr", listOf("I"), "J")
+                if (mutableClassDefBy("LX/Pyu;").fields.none { it.name == "A00" && it.type == "LX/933;" }) {
+                    throw PatchException("Keep unsent: Messenger 581 model wrapper field is missing")
+                }
+                parser
+            } else null
+            val messenger581ImageCapture = if (key == "keep_unsent" && packageMetadata.versionCode == "346213510") {
+                val callback = mutableClassDefBy("LX/SUm;").methods.singleOrNull { method ->
+                    method.name == "onCompletion" && method.returnType == "V" &&
+                        method.parameterTypes == listOf("Ljava/lang/Object;")
+                } ?: throw PatchException("Keep unsent: Messenger 581 image completion callback is missing")
+                callback.validateDownloadedImageCapture()
+                val mediaMetadata = mutableClassDefBy("LX/8uu;")
+                if (mediaMetadata.fields.none { it.name == "A03" && it.type == "J" } ||
+                    mediaMetadata.fields.none { it.name == "A06" && it.type == "Ljava/lang/String;" } ||
+                    mediaMetadata.fields.none { it.name == "A07" && it.type == "Ljava/lang/String;" } ||
+                    mutableClassDefBy("LX/SUm;").fields.none { it.name == "A07" && it.type == "LX/8uu;" }) {
+                    throw PatchException("Keep unsent: Messenger 581 downloaded-image metadata contract changed")
+                }
+                callback
             } else null
             if (key == COMMUNITY_INBOX) {
                 val contract = communityInboxContract ?: throw PatchException("Messenger controls: the native community inbox route is missing")
@@ -266,6 +318,8 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
                     incoming.injectE2eeIncomingCapture()
                     deleting.injectE2eeDeleteCapture()
                 }
+                messenger581MessageCapture?.injectMessageModelCapture()
+                messenger581ImageCapture?.injectDownloadedImageCapture()
                 if (key == "keep_unsent") {
                     notificationCaptureMethods.forEach { (className, methodId) ->
                         mutableClassDefBy(className).methods.single { it.hookId() == methodId }
