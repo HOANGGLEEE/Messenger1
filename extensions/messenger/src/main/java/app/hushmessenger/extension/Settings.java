@@ -601,7 +601,7 @@ public final class Settings {
                 throw new java.io.IOException("Can't move image into private storage");
             }
             temporary = null;
-            if (!store.saveMediaFile(directPath, threadId, messageTimestamp,
+            if (!store.saveMediaFile(directPath, mediaKeyTimestamp,
                     destination.getAbsolutePath(), System.currentTimeMillis())) {
                 destination.delete();
                 return;
