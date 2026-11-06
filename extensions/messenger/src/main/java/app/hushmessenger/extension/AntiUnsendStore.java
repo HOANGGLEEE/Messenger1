@@ -185,21 +185,44 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
                 "last_seen_at=? WHERE message_id=?",
                 new Object[] {threadId, senderId, messageTimestamp > 0 ? messageTimestamp : null, now, messageId});
         }
-        long unsentAt = 0;
-        try (Cursor cursor = db.query("messages", new String[] {"unsent_at"},
-                "message_id=?", new String[] {messageId}, null, null, null, "1")) {
-            if (cursor.moveToFirst() && !cursor.isNull(0)) unsentAt = cursor.getLong(0);
-        }
-        if (threadId != null && !threadId.isEmpty() && messageTimestamp > 0) {
-            ContentValues linked = new ContentValues();
-            linked.put("message_id", messageId);
-            linked.put("last_seen_at", now);
-            if (unsentAt > 0) linked.put("unsent_at", unsentAt);
-            db.update("media", linked,
-                "thread_id=? AND message_timestamp=? AND (message_id IS NULL OR message_id='')",
-                new String[] {threadId, Long.toString(messageTimestamp)});
-        }
+        resolveMediaMessageLink(db, threadId, messageTimestamp, now);
         pruneOccasionally(db, now);
+    }
+
+    /**
+     * Associate image rows only while the thread/timestamp identifies exactly one message.
+     * If a second message later collides on that timestamp, detach the inferred association.
+     */
+    private static void resolveMediaMessageLink(SQLiteDatabase db, String threadId,
+            long messageTimestamp, long now) {
+        if (threadId == null || threadId.isEmpty() || messageTimestamp <= 0) return;
+        String messageId = null;
+        long unsentAt = 0;
+        boolean ambiguous = false;
+        try (Cursor cursor = db.query("messages", new String[] {"message_id", "unsent_at"},
+                "thread_id=? AND message_timestamp=?",
+                new String[] {threadId, Long.toString(messageTimestamp)},
+                null, null, "received_at DESC", "2")) {
+            if (cursor.moveToFirst()) {
+                messageId = cursor.getString(0);
+                unsentAt = cursor.isNull(1) ? 0 : cursor.getLong(1);
+                ambiguous = cursor.moveToNext();
+            }
+        }
+        ContentValues link = new ContentValues();
+        link.put("last_seen_at", now);
+        if (ambiguous) {
+            link.putNull("message_id");
+            link.putNull("unsent_at");
+        } else if (messageId != null && !messageId.isEmpty()) {
+            link.put("message_id", messageId);
+            if (unsentAt > 0) link.put("unsent_at", unsentAt);
+            else link.putNull("unsent_at");
+        } else {
+            return;
+        }
+        db.update("media", link, "thread_id=? AND message_timestamp=?",
+            new String[] {threadId, Long.toString(messageTimestamp)});
     }
 
     synchronized void captureMediaMetadata(String directPath, String threadId,
@@ -225,31 +248,7 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
             update.put("last_seen_at", now);
             db.update("media", update, "media_key=?", new String[] {key});
         }
-        if (threadId != null && !threadId.isEmpty() && messageTimestamp > 0) {
-            String linkedMessageId = null;
-            long linkedUnsentAt = 0;
-            try (Cursor cursor = db.query("messages", new String[] {"message_id", "unsent_at"},
-                    "thread_id=? AND message_timestamp=?",
-                    new String[] {threadId, Long.toString(messageTimestamp)},
-                    null, null, "received_at DESC", "2")) {
-                if (cursor.moveToFirst()) {
-                    String candidate = cursor.getString(0);
-                    long candidateUnsentAt = cursor.isNull(1) ? 0 : cursor.getLong(1);
-                    // Do not guess when two messages share the same thread timestamp.
-                    if (!cursor.moveToNext()) {
-                        linkedMessageId = candidate;
-                        linkedUnsentAt = candidateUnsentAt;
-                    }
-                }
-            }
-            if (linkedMessageId != null && !linkedMessageId.isEmpty()) {
-                ContentValues link = new ContentValues();
-                link.put("message_id", linkedMessageId);
-                link.put("last_seen_at", now);
-                if (linkedUnsentAt > 0) link.put("unsent_at", linkedUnsentAt);
-                db.update("media", link, "media_key=?", new String[] {key});
-            }
-        }
+        resolveMediaMessageLink(db, threadId, messageTimestamp, now);
         pruneOccasionally(db, now);
     }
 
@@ -307,16 +306,13 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
             db.update("messages", values, "message_id=?", new String[] {messageId});
         }
         ContentValues mediaUnsent = new ContentValues();
-        mediaUnsent.put("message_id", messageId);
         mediaUnsent.put("unsent_at", now);
         mediaUnsent.put("last_seen_at", now);
         db.update("media", mediaUnsent, "message_id=?", new String[] {messageId});
         try (Cursor cursor = db.query("messages", new String[] {"thread_id", "message_timestamp"},
                 "message_id=?", new String[] {messageId}, null, null, null, "1")) {
             if (cursor.moveToFirst() && !cursor.isNull(0) && !cursor.isNull(1)) {
-                db.update("media", mediaUnsent,
-                    "thread_id=? AND message_timestamp=? AND (message_id IS NULL OR message_id='')",
-                    new String[] {cursor.getString(0), Long.toString(cursor.getLong(1))});
+                resolveMediaMessageLink(db, cursor.getString(0), cursor.getLong(1), now);
             }
         }
         pruneOccasionally(db, now);
