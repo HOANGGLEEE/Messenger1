@@ -211,17 +211,19 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         }
         ContentValues link = new ContentValues();
         link.put("last_seen_at", now);
+        String selection = "thread_id=? AND message_timestamp=?";
         if (ambiguous) {
-            link.putNull("message_id");
+            link.put("message_id", "");
             link.putNull("unsent_at");
         } else if (messageId != null && !messageId.isEmpty()) {
             link.put("message_id", messageId);
             if (unsentAt > 0) link.put("unsent_at", unsentAt);
             else link.putNull("unsent_at");
+            selection += " AND (message_id IS NULL OR message_id != '')";
         } else {
             return;
         }
-        db.update("media", link, "thread_id=? AND message_timestamp=?",
+        db.update("media", link, selection,
             new String[] {threadId, Long.toString(messageTimestamp)});
     }
 
