@@ -419,16 +419,21 @@ public final class Settings {
      */
     public static void captureIncomingMessage(String messageId, String threadId, String senderId,
             String text, long messageTimestamp) {
-        if (messageId == null || messageId.isEmpty() || text == null || text.isEmpty() || !wouldUse("keep_unsent")) return;
+        if (messageId == null || messageId.isEmpty() || !wouldUse("keep_unsent")) return;
         incrementUnsentCounter(UNSENT_CAPTURE_HITS);
         Context context = appContext;
         if (context == null) return;
         try {
-            AntiUnsendStore.get(context).captureText(
-                messageId, threadId, senderId, text, messageTimestamp, System.currentTimeMillis());
+            AntiUnsendStore store = AntiUnsendStore.get(context);
+            long now = System.currentTimeMillis();
+            // Keep an ID/thread/timestamp row even for photo-only messages with no text body.
+            store.captureMessageMetadata(messageId, threadId, senderId, messageTimestamp, now);
+            if (text != null && !text.isEmpty()) {
+                store.captureText(messageId, threadId, senderId, text, messageTimestamp, now);
+            }
             incrementUnsentCounter(UNSENT_CAPTURE_SAVED);
         } catch (RuntimeException error) {
-            hookFailedPrivately("keep_unsent", "Can't cache incoming message text", error);
+            hookFailedPrivately("keep_unsent", "Can't cache incoming message metadata", error);
         }
     }
 
