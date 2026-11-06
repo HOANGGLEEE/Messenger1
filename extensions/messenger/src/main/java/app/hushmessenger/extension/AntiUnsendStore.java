@@ -409,6 +409,8 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         String cutoff = Long.toString(now - RETENTION_MS);
         deleteMediaFiles(db, "received_at<?", new String[] {cutoff});
         db.delete("media", "received_at<?", new String[] {cutoff});
+        deleteMediaForMessageIds(db,
+            "SELECT message_id FROM messages WHERE received_at<?", new String[] {cutoff});
         db.delete("messages", "received_at<?", new String[] {cutoff});
         int count = 0;
         try (Cursor cursor = db.rawQuery("SELECT COUNT(*) FROM messages", null)) {
@@ -416,8 +418,9 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         }
         int excess = count - MAX_ROWS;
         if (excess > 0) {
-            db.execSQL("DELETE FROM messages WHERE message_id IN (" +
-                "SELECT message_id FROM messages ORDER BY last_seen_at ASC LIMIT " + excess + ")");
+            String oldestMessages = "SELECT message_id FROM messages ORDER BY last_seen_at ASC LIMIT " + excess;
+            deleteMediaForMessageIds(db, oldestMessages, null);
+            db.execSQL("DELETE FROM messages WHERE message_id IN (" + oldestMessages + ")");
         }
         int mediaCount = 0;
         try (Cursor cursor = db.rawQuery("SELECT COUNT(*) FROM media", null)) {
@@ -448,6 +451,12 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    private static void deleteMediaForMessageIds(SQLiteDatabase db, String messageIdQuery, String[] args) {
+        String where = "message_id IN (" + messageIdQuery + ")";
+        deleteMediaFiles(db, where, args);
+        db.delete("media", where, args);
     }
 
     private static void deleteMediaFiles(SQLiteDatabase db, String where, String[] args) {
