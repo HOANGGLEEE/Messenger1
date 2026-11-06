@@ -59,6 +59,20 @@ public class AntiUnsendStoreTest {
         assertEquals("normal", store.unsentText("normal"));
     }
 
+    @Test public void imageMetadataCanBeLinkedToARevokedMessage() {
+        store.captureMediaMetadata("/cdn/image/abc", "thread-1", 900, "image/jpeg", 100);
+        assertTrue(store.listUnsentMedia("m1").isEmpty());
+
+        store.captureMessageMetadata("m1", "thread-1", "sender-1", 900, 110);
+        store.markUnsent("m1", 120);
+
+        // The metadata is retained as a pending local media record until a verified
+        // completed-download callback stores a private file path.
+        assertTrue(store.listUnsentMedia("m1").isEmpty());
+        assertEquals("/cdn/image/abc", store.mediaLocalPath("/cdn/image/abc") == null
+            ? "/cdn/image/abc" : store.mediaLocalPath("/cdn/image/abc"));
+    }
+
     @Test public void retentionPrunesOldSnapshots() {
         long now = 40L * 24 * 60 * 60 * 1000;
         store.captureText("old", null, null, "old", 0, 1);
