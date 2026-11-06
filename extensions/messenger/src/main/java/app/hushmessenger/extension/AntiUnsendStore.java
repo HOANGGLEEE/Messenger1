@@ -185,85 +185,90 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
                 "last_seen_at=? WHERE message_id=?",
                 new Object[] {threadId, senderId, messageTimestamp > 0 ? messageTimestamp : null, now, messageId});
         }
-        resolveMediaMessageLink(db, threadId, messageTimestamp, now);
         pruneOccasionally(db, now);
     }
 
     /**
-     * Associate image rows only while the thread/timestamp identifies exactly one message.
-     * If a second message later collides on that timestamp, detach the inferred association.
+     * Record image metadata from the message model itself. The direct path plus media-key timestamp
+     * is the stable identity shared with the completed-download callback; no timestamp-only guessing.
      */
-    private static void resolveMediaMessageLink(SQLiteDatabase db, String threadId,
-            long messageTimestamp, long now) {
-        if (threadId == null || threadId.isEmpty() || messageTimestamp <= 0) return;
-        String messageId = null;
-        long unsentAt = 0;
-        boolean ambiguous = false;
-        try (Cursor cursor = db.query("messages", new String[] {"message_id", "unsent_at"},
-                "thread_id=? AND message_timestamp=?",
-                new String[] {threadId, Long.toString(messageTimestamp)},
-                null, null, "received_at DESC", "2")) {
-            if (cursor.moveToFirst()) {
-                messageId = cursor.getString(0);
-                unsentAt = cursor.isNull(1) ? 0 : cursor.getLong(1);
-                ambiguous = cursor.moveToNext();
-            }
-        }
-        ContentValues link = new ContentValues();
-        link.put("last_seen_at", now);
-        String selection = "thread_id=? AND message_timestamp=?";
-        if (ambiguous) {
-            link.put("message_id", "");
-            link.putNull("unsent_at");
-        } else if (messageId != null && !messageId.isEmpty()) {
-            link.put("message_id", messageId);
-            if (unsentAt > 0) link.put("unsent_at", unsentAt);
-            else link.putNull("unsent_at");
-            selection += " AND (message_id IS NULL OR message_id != '')";
-        } else {
-            return;
-        }
-        db.update("media", link, selection,
-            new String[] {threadId, Long.toString(messageTimestamp)});
-    }
-
-    synchronized void captureMediaMetadata(String directPath, String threadId,
-            long messageTimestamp, String mimeType, long now) {
-        if (directPath == null || directPath.isEmpty() || mimeType == null ||
-                !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) return;
-        String key = mediaKey(directPath, threadId, messageTimestamp);
+    synchronized void captureMediaMetadataForMessage(String directPath, String messageId,
+            String threadId, long mediaKeyTimestamp, String mimeType, long now) {
+        if (directPath == null || directPath.isEmpty() || messageId == null || messageId.isEmpty() ||
+                mimeType == null || !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) return;
+        String key = mediaKey(directPath, mediaKeyTimestamp);
         if (key == null) return;
         SQLiteDatabase db = getWritableDatabase();
         ContentValues values = new ContentValues();
         values.put("media_key", key);
+        values.put("message_id", messageId);
         if (threadId != null && !threadId.isEmpty()) values.put("thread_id", threadId);
-        if (messageTimestamp > 0) values.put("message_timestamp", messageTimestamp);
+        if (mediaKeyTimestamp > 0) values.put("message_timestamp", mediaKeyTimestamp);
+        values.put("mime_type", mimeType);
+        values.put("received_at", now);
+        values.put("last_seen_at", now);
+        long inserted = db.insertWithOnConflict("media", null, values, SQLiteDatabase.CONFLICT_IGNORE);
+        if (inserted == -1) {
+            String existingMessageId = null;
+            try (Cursor cursor = db.query("media", new String[] {"message_id"},
+                    "media_key=?", new String[] {key}, null, null, null, "1")) {
+                if (cursor.moveToFirst() && !cursor.isNull(0)) existingMessageId = cursor.getString(0);
+            }
+            if (existingMessageId != null && existingMessageId.isEmpty()) {
+                // A previously detected direct-path collision remains unresolved.
+            } else if (existingMessageId != null && !existingMessageId.equals(messageId)) {
+                ContentValues ambiguous = new ContentValues();
+                ambiguous.put("message_id", "");
+                ambiguous.putNull("unsent_at");
+                ambiguous.put("last_seen_at", now);
+                db.update("media", ambiguous, "media_key=?", new String[] {key});
+            } else {
+                ContentValues update = new ContentValues();
+                update.put("message_id", messageId);
+                if (threadId != null && !threadId.isEmpty()) update.put("thread_id", threadId);
+                if (mediaKeyTimestamp > 0) update.put("message_timestamp", mediaKeyTimestamp);
+                update.put("mime_type", mimeType);
+                update.put("last_seen_at", now);
+                db.update("media", update, "media_key=?", new String[] {key});
+            }
+        }
+        pruneOccasionally(db, now);
+    }
+
+    synchronized void captureMediaMetadata(String directPath, long mediaKeyTimestamp,
+            String mimeType, long now) {
+        if (directPath == null || directPath.isEmpty() || mimeType == null ||
+                !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) return;
+        String key = mediaKey(directPath, mediaKeyTimestamp);
+        if (key == null) return;
+        SQLiteDatabase db = getWritableDatabase();
+        ContentValues values = new ContentValues();
+        values.put("media_key", key);
+        if (mediaKeyTimestamp > 0) values.put("message_timestamp", mediaKeyTimestamp);
         values.put("mime_type", mimeType);
         values.put("received_at", now);
         values.put("last_seen_at", now);
         long inserted = db.insertWithOnConflict("media", null, values, SQLiteDatabase.CONFLICT_IGNORE);
         if (inserted == -1) {
             ContentValues update = new ContentValues();
-            if (threadId != null && !threadId.isEmpty()) update.put("thread_id", threadId);
-            if (messageTimestamp > 0) update.put("message_timestamp", messageTimestamp);
+            if (mediaKeyTimestamp > 0) update.put("message_timestamp", mediaKeyTimestamp);
             update.put("mime_type", mimeType);
             update.put("last_seen_at", now);
             db.update("media", update, "media_key=?", new String[] {key});
         }
-        resolveMediaMessageLink(db, threadId, messageTimestamp, now);
         pruneOccasionally(db, now);
     }
 
-    synchronized String mediaLocalPath(String directPath, String threadId, long messageTimestamp) {
+    synchronized String mediaLocalPath(String directPath, long mediaKeyTimestamp) {
         if (directPath == null || directPath.isEmpty()) return null;
         try (Cursor cursor = getReadableDatabase().query("media", new String[] {"local_path"},
-                "media_key=?", new String[] {mediaKey(directPath, threadId, messageTimestamp)}, null, null, null, "1")) {
+                "media_key=?", new String[] {mediaKey(directPath, mediaKeyTimestamp)}, null, null, null, "1")) {
             if (!cursor.moveToFirst() || cursor.isNull(0)) return null;
             return cursor.getString(0);
         }
     }
 
-    synchronized boolean saveMediaFile(String directPath, String threadId, long messageTimestamp,
+    synchronized boolean saveMediaFile(String directPath, long mediaKeyTimestamp,
             String localPath, long now) {
         if (directPath == null || directPath.isEmpty() || localPath == null || localPath.isEmpty()) return false;
         ContentValues values = new ContentValues();
@@ -271,7 +276,7 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         values.put("last_seen_at", now);
         SQLiteDatabase db = getWritableDatabase();
         int updated = db.update("media", values, "media_key=?",
-            new String[] {mediaKey(directPath, threadId, messageTimestamp)});
+            new String[] {mediaKey(directPath, mediaKeyTimestamp)});
         pruneOccasionally(db, now);
         return updated > 0;
     }
@@ -311,12 +316,6 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         mediaUnsent.put("unsent_at", now);
         mediaUnsent.put("last_seen_at", now);
         db.update("media", mediaUnsent, "message_id=?", new String[] {messageId});
-        try (Cursor cursor = db.query("messages", new String[] {"thread_id", "message_timestamp"},
-                "message_id=?", new String[] {messageId}, null, null, null, "1")) {
-            if (cursor.moveToFirst() && !cursor.isNull(0) && !cursor.isNull(1)) {
-                resolveMediaMessageLink(db, cursor.getString(0), cursor.getLong(1), now);
-            }
-        }
         pruneOccasionally(db, now);
     }
 
@@ -436,11 +435,10 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         prune(getWritableDatabase(), now);
     }
 
-    static String mediaKey(String directPath, String threadId, long messageTimestamp) {
+    static String mediaKey(String directPath, long mediaKeyTimestamp) {
         if (directPath == null || directPath.isEmpty()) return null;
         try {
-            String identity = directPath + "\n" + (threadId == null ? "" : threadId) +
-                "\n" + messageTimestamp;
+            String identity = directPath + "\n" + mediaKeyTimestamp;
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(
                 identity.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             StringBuilder result = new StringBuilder(digest.length * 2);
