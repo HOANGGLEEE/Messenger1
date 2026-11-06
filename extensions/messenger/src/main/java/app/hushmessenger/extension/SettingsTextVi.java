@@ -149,7 +149,7 @@ final class SettingsTextVi {
         {"unsent_history_clear_failed", "Không thể xóa lịch sử tin nhắn thu hồi."},
         {"unsent_history_read_failed", "Không thể đọc lịch sử tin nhắn thu hồi."},
         {"unsent_history_empty", "Chưa ghi nhận tin nhắn đã thu hồi nào."},
-        {"unsent_history_missing_text", "Không kịp lưu nội dung trước khi tin nhắn bị thu hồi."},
+        {"unsent_history_missing_text", "Chưa kịp lưu phần văn bản trước khi tin nhắn bị thu hồi."},
         {"unsent_history_unknown_sender", "Chưa xác định người gửi"},
         {"unsent_history_sender", "Người gửi: %s"},
         {"unsent_history_received_at", "Nhận lúc %s"},
