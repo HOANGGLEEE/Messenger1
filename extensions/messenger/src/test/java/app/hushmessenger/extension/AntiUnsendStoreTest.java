@@ -127,15 +127,28 @@ public class AntiUnsendStoreTest {
         }
     }
 
-    @Test public void retentionPrunesOldSnapshots() {
+    @Test public void retentionPrunesOldSnapshotsAndTheirImageFiles() {
         long now = 40L * 24 * 60 * 60 * 1000;
         store.captureText("old", null, null, "old", 0, 1);
+        store.captureMediaMetadata("/cdn/image/old", "thread-old", 10, "image/jpeg", 1);
+        store.captureMessageMetadata("old", "thread-old", "sender-old", 10, 1);
         store.captureText("new", null, null, "new", 0, now);
         store.markUnsent("old", 2);
         store.markUnsent("new", now);
-        store.pruneNow(now);
-        var entries = store.listUnsent(10);
-        assertEquals(1, entries.size());
-        assertEquals("new", entries.get(0).messageId);
+
+        java.io.File oldImage = new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(), "expired-image.jpg");
+        try {
+            assertTrue(oldImage.createNewFile());
+            assertTrue(store.saveMediaFile("/cdn/image/old", "thread-old", 10, oldImage.getAbsolutePath(), 2));
+            store.pruneNow(now);
+            var entries = store.listUnsent(10);
+            assertEquals(1, entries.size());
+            assertEquals("new", entries.get(0).messageId);
+            assertFalse(oldImage.exists());
+        } catch (java.io.IOException error) {
+            fail(error.getMessage());
+        } finally {
+            oldImage.delete();
+        }
     }
 }
