@@ -3,13 +3,17 @@ package app.hushmessenger.extension;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.os.Bundle;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.view.View;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import java.text.DateFormat;
+import java.io.File;
 import java.util.Date;
 import java.util.List;
 
@@ -79,7 +83,9 @@ public final class UnsentHistoryActivity extends Activity {
             Settings.unsentCaptureHits(), Settings.unsentCaptureSaved(),
             Settings.unsentRevokeHits(), Settings.unsentRevokeSaved()) + "\n" +
             text.get("unsent_history_notification_diagnostics",
-                Settings.unsentNotificationHits(), Settings.unsentNotificationSaved()));
+                Settings.unsentNotificationHits(), Settings.unsentNotificationSaved()) + "\n" +
+            text.get("unsent_history_media_diagnostics",
+                Settings.unsentMediaHits(), Settings.unsentMediaSaved()));
         list.removeAllViews();
         List<AntiUnsendStore.Entry> entries;
         List<AntiUnsendStore.NotificationEntry> notificationEntries;
@@ -114,6 +120,7 @@ public final class UnsentHistoryActivity extends Activity {
                     ? text.get("unsent_history_missing_text") : entry.text, 16, ui.text, false);
                 body.setTextIsSelectable(true);
                 ui.add(card, body, 8);
+                addSavedImages(card, AntiUnsendStore.get(this).listUnsentMedia(entry.messageId));
                 ui.add(card, ui.text(text.get("unsent_history_received_at",
                     dates.format(new Date(entry.receivedAt))), 12, ui.muted, false), 10);
                 ui.add(card, ui.text(text.get("unsent_history_unsent_at",
@@ -143,6 +150,43 @@ public final class UnsentHistoryActivity extends Activity {
                     dates.format(new Date(entry.postedAt))), 12, ui.muted, false), 10);
                 ui.add(list, card, 12);
             }
+        }
+    }
+
+    private void addSavedImages(LinearLayout card, List<AntiUnsendStore.MediaEntry> images) {
+        if (images == null || images.isEmpty()) return;
+        int maxWidth = Math.max(ui.dp(180),
+            getResources().getDisplayMetrics().widthPixels - ui.dp(88));
+        int maxHeight = ui.dp(320);
+        int shown = 0;
+        for (AntiUnsendStore.MediaEntry entry : images) {
+            if (shown >= 8) break;
+            File file = new File(entry.localPath);
+            if (!file.isFile() || !file.canRead()) continue;
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) continue;
+
+            int sample = 1;
+            while (bounds.outWidth / (sample * 2) >= maxWidth &&
+                    bounds.outHeight / (sample * 2) >= maxHeight) {
+                sample *= 2;
+            }
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = sample;
+            Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath(), options);
+            if (bitmap == null) continue;
+
+            ImageView image = new ImageView(this);
+            image.setTag("unsent_history_image");
+            image.setImageBitmap(bitmap);
+            image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            image.setAdjustViewBounds(true);
+            image.setMaxHeight(maxHeight);
+            image.setContentDescription(text.get("unsent_history_image_description"));
+            ui.add(card, image, 10);
+            shown++;
         }
     }
 
