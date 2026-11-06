@@ -119,7 +119,11 @@ public final class UnsentHistoryActivity extends Activity {
                     ? text.get("unsent_history_missing_text") : entry.text, 16, ui.text, false);
                 body.setTextIsSelectable(true);
                 ui.add(card, body, 8);
-                addSavedImages(card, AntiUnsendStore.get(this).listUnsentMedia(entry.messageId));
+                try {
+                    addSavedImages(card, AntiUnsendStore.get(this).listUnsentMedia(entry.messageId));
+                } catch (RuntimeException error) {
+                    Settings.hookFailedPrivately("keep_unsent", "Can't display locally saved images", error);
+                }
                 ui.add(card, ui.text(text.get("unsent_history_received_at",
                     dates.format(new Date(entry.receivedAt))), 12, ui.muted, false), 10);
                 ui.add(card, ui.text(text.get("unsent_history_unsent_at",
