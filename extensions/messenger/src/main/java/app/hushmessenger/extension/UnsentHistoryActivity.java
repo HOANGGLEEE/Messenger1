@@ -3,7 +3,6 @@ package app.hushmessenger.extension;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.os.Bundle;
-import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.view.View;
 import android.widget.Button;
@@ -169,8 +168,8 @@ public final class UnsentHistoryActivity extends Activity {
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) continue;
 
             int sample = 1;
-            while (bounds.outWidth / (sample * 2) >= maxWidth &&
-                    bounds.outHeight / (sample * 2) >= maxHeight) {
+            while (bounds.outWidth / (sample * 2) > maxWidth ||
+                    bounds.outHeight / (sample * 2) > maxHeight) {
                 sample *= 2;
             }
             BitmapFactory.Options options = new BitmapFactory.Options();
