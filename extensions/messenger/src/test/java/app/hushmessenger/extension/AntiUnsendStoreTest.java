@@ -108,6 +108,19 @@ public class AntiUnsendStoreTest {
         assertTrue(store.listUnsentMedia("m4").isEmpty());
     }
 
+    @Test public void laterTimestampCollisionDetachesAnEarlierInferredImageLink() {
+        store.captureMediaMetadata("/cdn/image/late-collision", "thread-4", 7777, "image/jpeg", 90);
+        store.captureMessageMetadata("m6", "thread-4", "sender-1", 7777, 100);
+        store.markUnsent("m6", 110);
+        assertEquals(1, store.listUnsentMedia("m6").size());
+
+        // A second message with the same timestamp makes the earlier inferred link ambiguous.
+        store.captureMessageMetadata("m7", "thread-4", "sender-2", 7777, 120);
+        assertTrue(store.listUnsentMedia("m6").isEmpty());
+        store.markUnsent("m7", 130);
+        assertTrue(store.listUnsentMedia("m7").isEmpty());
+    }
+
     @Test public void clearingUnsentHistoryDeletesItsPrivateImageFiles() {
         store.captureMediaMetadata("/cdn/image/delete-me", "thread-5", 999, "image/jpeg", 100);
         store.captureMessageMetadata("m5", "thread-5", "sender-5", 999, 101);
