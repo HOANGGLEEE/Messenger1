@@ -199,20 +199,30 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         String key = mediaKey(directPath, mediaKeyTimestamp);
         if (key == null) return;
         SQLiteDatabase db = getWritableDatabase();
+        long messageUnsentAt = 0;
+        try (Cursor cursor = db.query("messages", new String[] {"unsent_at"},
+                "message_id=?", new String[] {messageId}, null, null, null, "1")) {
+            if (cursor.moveToFirst() && !cursor.isNull(0)) messageUnsentAt = cursor.getLong(0);
+        }
         ContentValues values = new ContentValues();
         values.put("media_key", key);
         values.put("message_id", messageId);
         if (threadId != null && !threadId.isEmpty()) values.put("thread_id", threadId);
         if (mediaKeyTimestamp > 0) values.put("message_timestamp", mediaKeyTimestamp);
         values.put("mime_type", mimeType);
+        if (messageUnsentAt > 0) values.put("unsent_at", messageUnsentAt);
         values.put("received_at", now);
         values.put("last_seen_at", now);
         long inserted = db.insertWithOnConflict("media", null, values, SQLiteDatabase.CONFLICT_IGNORE);
         if (inserted == -1) {
             String existingMessageId = null;
-            try (Cursor cursor = db.query("media", new String[] {"message_id"},
+            long existingUnsentAt = 0;
+            try (Cursor cursor = db.query("media", new String[] {"message_id", "unsent_at"},
                     "media_key=?", new String[] {key}, null, null, null, "1")) {
-                if (cursor.moveToFirst() && !cursor.isNull(0)) existingMessageId = cursor.getString(0);
+                if (cursor.moveToFirst()) {
+                    if (!cursor.isNull(0)) existingMessageId = cursor.getString(0);
+                    if (!cursor.isNull(1)) existingUnsentAt = cursor.getLong(1);
+                }
             }
             if (existingMessageId != null && existingMessageId.isEmpty()) {
                 // A previously detected direct-path collision remains unresolved.
@@ -228,6 +238,8 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
                 if (threadId != null && !threadId.isEmpty()) update.put("thread_id", threadId);
                 if (mediaKeyTimestamp > 0) update.put("message_timestamp", mediaKeyTimestamp);
                 update.put("mime_type", mimeType);
+                if (existingUnsentAt > 0) update.put("unsent_at", existingUnsentAt);
+                else if (messageUnsentAt > 0) update.put("unsent_at", messageUnsentAt);
                 update.put("last_seen_at", now);
                 db.update("media", update, "media_key=?", new String[] {key});
             }
