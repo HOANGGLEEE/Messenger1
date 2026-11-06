@@ -10,6 +10,9 @@ import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.view.Window;
 import android.view.WindowManager;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -281,6 +284,9 @@ public final class Settings {
     private static final String UNSENT_REVOKE_SAVED = "unsent_revoke_saved";
     private static final String UNSENT_NOTIFICATION_HITS = "unsent_notification_hits";
     private static final String UNSENT_NOTIFICATION_SAVED = "unsent_notification_saved";
+    private static final String UNSENT_MEDIA_HITS = "unsent_media_hits";
+    private static final String UNSENT_MEDIA_SAVED = "unsent_media_saved";
+    private static final long MAX_UNSENT_IMAGE_BYTES = 40L * 1024 * 1024;
 
     private static synchronized void incrementUnsentCounter(String key) {
         SharedPreferences prefs = preferences;
@@ -316,6 +322,16 @@ public final class Settings {
     static long unsentNotificationSaved() {
         SharedPreferences prefs = preferences;
         return prefs == null ? 0 : prefs.getLong(UNSENT_NOTIFICATION_SAVED, 0);
+    }
+
+    static long unsentMediaHits() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_MEDIA_HITS, 0);
+    }
+
+    static long unsentMediaSaved() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_MEDIA_SAVED, 0);
     }
 
     private static String notificationText(Bundle extras, String... keys) {
@@ -414,6 +430,98 @@ public final class Settings {
         } catch (RuntimeException error) {
             hookFailedPrivately("keep_unsent", "Can't cache incoming message text", error);
         }
+    }
+
+    /**
+     * Copy an image that Messenger has already downloaded into this app's private storage.
+     * The caller must be a verified post-download callback; this method never fetches a URL.
+     */
+    public static void captureDownloadedImage(String directPath, String threadId,
+            long messageTimestamp, String mimeType, String sourcePath) {
+        if (!wouldUse("keep_unsent") || directPath == null || directPath.isEmpty() ||
+                mimeType == null || !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/") ||
+                sourcePath == null || sourcePath.isEmpty()) return;
+        incrementUnsentCounter(UNSENT_MEDIA_HITS);
+        Context context = appContext;
+        if (context == null) return;
+        File temporary = null;
+        try {
+            File source = new File(sourcePath);
+            long sourceLength = source.length();
+            if (!source.isFile() || !source.canRead() || sourceLength <= 0 ||
+                    sourceLength > MAX_UNSENT_IMAGE_BYTES) return;
+
+            String key = AntiUnsendStore.mediaKey(directPath, threadId, messageTimestamp);
+            if (key == null) return;
+            AntiUnsendStore store = AntiUnsendStore.get(context);
+            store.captureMediaMetadata(directPath, threadId, messageTimestamp, mimeType,
+                System.currentTimeMillis());
+
+            File directory = new File(context.getFilesDir(), "hush_unsent_media");
+            if (!directory.isDirectory() && !directory.mkdirs()) {
+                throw new java.io.IOException("Can't create private media directory");
+            }
+            String extension = imageExtension(mimeType);
+            File destination = new File(directory, key + "." + extension);
+            if (destination.isFile() && destination.length() > 0) {
+                if (store.saveMediaFile(directPath, threadId, messageTimestamp,
+                        destination.getAbsolutePath(), System.currentTimeMillis())) {
+                    incrementUnsentCounter(UNSENT_MEDIA_SAVED);
+                }
+                return;
+            }
+
+            temporary = new File(directory, key + ".tmp");
+            if (temporary.exists() && !temporary.delete()) {
+                throw new java.io.IOException("Can't replace temporary image");
+            }
+            long copied = 0;
+            byte[] buffer = new byte[16 * 1024];
+            try (FileInputStream input = new FileInputStream(source);
+                 FileOutputStream output = new FileOutputStream(temporary)) {
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    copied += count;
+                    if (copied > MAX_UNSENT_IMAGE_BYTES) {
+                        throw new java.io.IOException("Image exceeds local archive limit");
+                    }
+                    output.write(buffer, 0, count);
+                }
+                output.flush();
+                output.getFD().sync();
+            }
+            if (copied != sourceLength || copied == 0) {
+                throw new java.io.IOException("Downloaded image changed while being copied");
+            }
+            if (destination.exists() && !destination.delete()) {
+                throw new java.io.IOException("Can't replace archived image");
+            }
+            if (!temporary.renameTo(destination)) {
+                throw new java.io.IOException("Can't move image into private storage");
+            }
+            temporary = null;
+            if (!store.saveMediaFile(directPath, threadId, messageTimestamp,
+                    destination.getAbsolutePath(), System.currentTimeMillis())) {
+                destination.delete();
+                return;
+            }
+            incrementUnsentCounter(UNSENT_MEDIA_SAVED);
+        } catch (Exception error) {
+            if (temporary != null) temporary.delete();
+            hookFailedPrivately("keep_unsent", "Can't save downloaded image for local history", error);
+        }
+    }
+
+    private static String imageExtension(String mimeType) {
+        String mime = mimeType.toLowerCase(java.util.Locale.ROOT);
+        if (mime.equals("image/jpeg") || mime.equals("image/jpg")) return "jpg";
+        if (mime.equals("image/png")) return "png";
+        if (mime.equals("image/webp")) return "webp";
+        if (mime.equals("image/gif")) return "gif";
+        if (mime.equals("image/heic")) return "heic";
+        if (mime.equals("image/heif")) return "heif";
+        if (mime.equals("image/avif")) return "avif";
+        return "img";
     }
 
     /** Render-path fallback until a verified receive/persist hook can provide sender/thread metadata. */
