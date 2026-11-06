@@ -202,7 +202,7 @@ final class SettingsText {
         ENGLISH.put("unsent_not_active", "No unsend activity observed since restart");
         ENGLISH.put("unsent_history_title", "Unsent message history");
         ENGLISH.put("unsent_history_entry_help", "View messages saved locally on this device and later reported as unsent by Messenger.");
-        ENGLISH.put("unsent_history_help", "Stored only on this device. Exact rows use a Messenger message ID. Notification fallback rows preserve recent notification text but are not called unsent because Android notifications do not reliably expose that ID.");
+        ENGLISH.put("unsent_history_help", "Stored only on this device. Exact rows use a Messenger message ID. Regular image attachments are copied after Messenger finishes downloading them. Notification fallback rows preserve recent notification text but are not called unsent because Android notifications do not reliably expose that ID.");
         ENGLISH.put("unsent_history_diagnostics", "Capture hook: %d, saved: %d • Revoke hook: %d, marked: %d");
         ENGLISH.put("unsent_history_notification_diagnostics", "Notification fallback: %d hooks, %d new snapshots");
         ENGLISH.put("unsent_history_media_diagnostics", "Image capture: %d callbacks, %d saved locally");
@@ -214,7 +214,7 @@ final class SettingsText {
         ENGLISH.put("unsent_history_notification_at", "Notification %s");
         ENGLISH.put("unsent_history_back", "Back");
         ENGLISH.put("unsent_history_clear", "Clear history");
-        ENGLISH.put("unsent_history_clear_confirm", "Delete every locally saved unsent-message record and notification snapshot?");
+        ENGLISH.put("unsent_history_clear_confirm", "Delete every locally saved unsent-message record, image and notification snapshot?");
         ENGLISH.put("unsent_history_cleared", "Unsent history cleared");
         ENGLISH.put("unsent_history_clear_failed", "Couldn't clear unsent history.");
         ENGLISH.put("unsent_history_read_failed", "Couldn't read unsent history.");
