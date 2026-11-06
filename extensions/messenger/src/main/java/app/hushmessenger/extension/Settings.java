@@ -441,8 +441,101 @@ public final class Settings {
      * Copy an image that Messenger has already downloaded into this app's private storage.
      * The caller must be a verified post-download callback; this method never fetches a URL.
      */
-    public static void captureDownloadedImage(String directPath, String threadId,
-            long messageTimestamp, String mimeType, String sourcePath) {
+    private static final int MESSAGE_MODEL_TEXT = 0x0036452d;
+    private static final int MESSAGE_MODEL_IS_UNSENT = 0xe9939666;
+    private static final int MESSAGE_MODEL_DIRECT_PATH = 0xbb595234;
+    private static final int MESSAGE_MODEL_DIRECT_PATH_MIME = 0x3b60c01a;
+    private static final int MESSAGE_MODEL_MEDIA_KEY_TIMESTAMP = 0xf3017894;
+
+    private static Object invokeModelGetter(Object target, String name) {
+        if (target == null) return null;
+        try {
+            return target.getClass().getMethod(name).invoke(target);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static Object readMessageModelValue(Object wrapper, String getter, int key) {
+        if (wrapper == null) return null;
+        try {
+            Object model = wrapper.getClass().getField("A00").get(wrapper);
+            if (model == null) return null;
+            return model.getClass().getMethod(getter, int.class).invoke(model, key);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String messageModelString(Object target, String getter) {
+        Object value = invokeModelGetter(target, getter);
+        return value instanceof String ? (String) value : null;
+    }
+
+    private static long messageModelLong(Object target, String getter) {
+        Object value = invokeModelGetter(target, getter);
+        if (value instanceof Number) return ((Number) value).longValue();
+        if (value instanceof String) {
+            try { return Long.parseLong((String) value); }
+            catch (NumberFormatException ignored) { }
+        }
+        return 0;
+    }
+
+    /**
+     * Snapshot the verified Messenger 581 message-model object without changing Messenger's own
+     * state. The model exposes message_id/thread_key/is_unsent and its nested image metadata.
+     */
+    public static void captureIncomingQpl(Object qpl) {
+        if (!wouldUse("keep_unsent") || qpl == null) return;
+        String messageId = messageModelString(qpl, "A0I");
+        if (messageId == null || messageId.isEmpty()) return;
+        String threadKey = messageModelString(qpl, "A0L");
+        String senderId = messageModelString(qpl, "A0K");
+        long messageTimestamp = messageModelLong(qpl, "A0M");
+
+        Object content = invokeModelGetter(qpl, "A0B");
+        Object messageContent = invokeModelGetter(content, "A01");
+        Object textValue = readMessageModelValue(messageContent, "BOa", MESSAGE_MODEL_TEXT);
+        String body = textValue instanceof String ? (String) textValue : null;
+        captureIncomingMessage(messageId, threadKey, senderId, body, messageTimestamp);
+
+        Context context = appContext;
+        if (context != null && messageContent != null) {
+            try {
+                Object imageContainer = invokeModelGetter(messageContent, "A03");
+                Object imageRows = invokeModelGetter(imageContainer, "A00");
+                if (imageRows instanceof Iterable<?>) {
+                    AntiUnsendStore store = AntiUnsendStore.get(context);
+                    long now = System.currentTimeMillis();
+                    for (Object image : (Iterable<?>) imageRows) {
+                        String directPath = (String) readMessageModelValue(
+                            image, "BOa", MESSAGE_MODEL_DIRECT_PATH);
+                        String mimeType = (String) readMessageModelValue(
+                            image, "BOa", MESSAGE_MODEL_DIRECT_PATH_MIME);
+                        Object rawTimestamp = readMessageModelValue(
+                            image, "Akr", MESSAGE_MODEL_MEDIA_KEY_TIMESTAMP);
+                        long mediaKeyTimestamp = rawTimestamp instanceof Number
+                            ? ((Number) rawTimestamp).longValue() : 0;
+                        if (directPath == null || directPath.isEmpty() || mimeType == null ||
+                                !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) continue;
+                        store.captureMediaMetadataForMessage(directPath, messageId, threadKey,
+                            mediaKeyTimestamp, mimeType, now);
+                    }
+                }
+            } catch (Exception error) {
+                hookFailedPrivately("keep_unsent", "Can't link image metadata to the message", error);
+            }
+        }
+
+        Object unsentValue = readMessageModelValue(qpl, "Akp", MESSAGE_MODEL_IS_UNSENT);
+        if (Boolean.TRUE.equals(unsentValue) && !isKeptUnsent(messageId)) {
+            recordUnsent(messageId);
+        }
+    }
+
+    public static void captureDownloadedImage(String directPath, String mimeType,
+            long mediaKeyTimestamp, String sourcePath) {
         if (!wouldUse("keep_unsent") || directPath == null || directPath.isEmpty() ||
                 mimeType == null || !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/") ||
                 sourcePath == null || sourcePath.isEmpty()) return;
@@ -456,10 +549,10 @@ public final class Settings {
             if (!source.isFile() || !source.canRead() || sourceLength <= 0 ||
                     sourceLength > MAX_UNSENT_IMAGE_BYTES) return;
 
-            String key = AntiUnsendStore.mediaKey(directPath, threadId, messageTimestamp);
+            String key = AntiUnsendStore.mediaKey(directPath, mediaKeyTimestamp);
             if (key == null) return;
             AntiUnsendStore store = AntiUnsendStore.get(context);
-            store.captureMediaMetadata(directPath, threadId, messageTimestamp, mimeType,
+            store.captureMediaMetadata(directPath, mediaKeyTimestamp, mimeType,
                 System.currentTimeMillis());
 
             File directory = new File(context.getFilesDir(), "hush_unsent_media");
@@ -469,7 +562,7 @@ public final class Settings {
             String extension = imageExtension(mimeType);
             File destination = new File(directory, key + "." + extension);
             if (destination.isFile() && destination.length() > 0) {
-                if (store.saveMediaFile(directPath, threadId, messageTimestamp,
+                if (store.saveMediaFile(directPath, mediaKeyTimestamp,
                         destination.getAbsolutePath(), System.currentTimeMillis())) {
                     incrementUnsentCounter(UNSENT_MEDIA_SAVED);
                 }
