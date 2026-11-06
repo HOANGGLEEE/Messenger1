@@ -1304,9 +1304,18 @@ internal fun MutableMethod.validateDownloadedImageCapture(): Int {
             (code[index - 1] as? ReferenceInstruction)?.reference?.toString() ==
                 "LX/001;->A0F(Ljava/lang/String;)Ljava/io/File;"
     }
+    val metadataLoad = code.indices.any { index ->
+        val instruction = code[index]
+        instruction.opcode == Opcode.IGET_OBJECT &&
+            (instruction as? TwoRegisterInstruction)?.registerA == 4 &&
+            (instruction as? ReferenceInstruction)?.reference?.toString() == "LX/SUm;->A07:LX/8uu;"
+    }
+    val scratchRegistersUsedLater = fileResult != null && code.drop(fileResult + 1).any {
+        it.toString().contains("v11") || it.toString().contains("v12")
+    }
     if (definingClass != "LX/SUm;" || name != "onCompletion" || returnType != "V" ||
         parameterTypes != listOf("Ljava/lang/Object;") || implementation!!.registerCount != 26 ||
-        fileResult == null ||
+        fileResult == null || !metadataLoad || scratchRegistersUsedLater ||
         "LX/SUm;->A07:LX/8uu;" !in references ||
         "Ljava/io/File;->exists()Z" !in references ||
         "Ljava/io/File;->canRead()Z" !in references ||
