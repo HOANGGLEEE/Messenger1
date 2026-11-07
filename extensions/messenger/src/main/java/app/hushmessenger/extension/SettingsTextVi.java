@@ -7,6 +7,7 @@ final class SettingsTextVi {
     static final String[][] TEXT = {
         {"controls", "Chức năng"},
         {"app", "Ứng dụng"},
+        {"history", "Lịch sử"},
         {"all", "Tất cả"},
         {"inbox", "Hộp thư"},
         {"chats", "Đoạn chat"},
