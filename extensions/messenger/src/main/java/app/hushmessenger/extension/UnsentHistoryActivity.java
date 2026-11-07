@@ -285,8 +285,10 @@ public final class UnsentHistoryActivity extends Activity {
         summaryNotifications.setText(Integer.toString(notificationEntries.size()));
         boolean active = Settings.keepUnsent();
         boolean modelSeen = Settings.unsentModelHookHits() > 0 || Settings.unsentCaptureHits() > 0;
+        boolean parserEntered = Settings.unsentModelParserEntries() > 0;
         String state = !active ? "unsent_history_inactive" :
-            modelSeen ? "unsent_history_active" : "unsent_history_active_waiting";
+            modelSeen ? "unsent_history_active" :
+            parserEntered ? "unsent_history_active_parser_waiting" : "unsent_history_active_waiting";
         boolean healthy = active && modelSeen;
         status.setText(text.get(state));
         status.setTextColor(healthy ? (ui.background == 0xff000000 ? 0xff83d6a8 : 0xff18794e) : ui.warning);
@@ -324,6 +326,8 @@ public final class UnsentHistoryActivity extends Activity {
 
     private void updateDiagnostics() {
         diagnostics.setText(
+            text.get("unsent_history_parser_diagnostics",
+                Settings.unsentModelParserEntries(), Settings.unsentModelHookHits()) + "\n" +
             text.get("unsent_history_model_diagnostics",
                 Settings.unsentModelHookHits(), Settings.unsentModelIdMissing()) + "\n" +
             text.get("unsent_history_diagnostics",
