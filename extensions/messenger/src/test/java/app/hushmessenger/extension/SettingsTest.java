@@ -79,7 +79,8 @@ public class SettingsTest {
         assertEquals("ordinary text", Settings.labelKeptUnsent("ordinary text", "other-message"));
         assertTrue(Settings.suppressUnsent(true, "other-message"));
         assertFalse(Settings.suppressUnsent(false, "not-unsent"));
-        assertEquals("Observation does not change the predicate result", 0, Settings.lastActive("keep_unsent"));
+        assertTrue("A true Messenger unsent predicate is a recorded event",
+            Settings.lastActive("keep_unsent") > 0);
 
         Settings.recordUnsent("retained-message");
         assertTrue(Settings.lastActive("keep_unsent") > 0);
@@ -129,17 +130,18 @@ public class SettingsTest {
             Switch choice = root.findViewWithTag("keep_unsent");
             assertTrue(choice.isChecked());
             String spoken = choice.getContentDescription().toString();
-            assertTrue(spoken.contains("private local text snapshot"));
-            assertTrue(spoken.contains("Messenger's own unsend behavior is left unchanged"));
-            assertTrue(spoken.contains("verified E2EE receive/revoke path"));
-            assertTrue(spoken.contains("media attachments"));
+            assertTrue(spoken.contains("Keeps local message text and IDs"));
+            assertTrue(spoken.contains("photos are copied only after Messenger downloads them"));
+            assertTrue(spoken.contains("Notification snapshots are a separate fallback"));
+            assertTrue(spoken.contains("Group coverage is not verified"));
             assertEquals("No unsend activity observed since restart",
                 ((android.widget.TextView) root.findViewWithTag("active_keep_unsent")).getText().toString());
         }
         assertEquals("original text", Settings.labelKeptUnsent("original text", "retained-message"));
         assertTrue(Settings.suppressUnsent(true, "retained-message"));
         assertFalse(Settings.suppressUnsent(false, "retained-message"));
-        assertEquals("Reading an old retained message is not a new interception", 0, Settings.lastActive("keep_unsent"));
+        assertTrue("Reading a retained unsent predicate is still observed as an event",
+            Settings.lastActive("keep_unsent") > 0);
     }
 
     @Test @Config(sdk = {28, 36}) public void concurrentUnsendIdentifiersSurviveADiskReload() throws Exception {
