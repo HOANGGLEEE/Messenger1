@@ -1332,8 +1332,9 @@ internal fun MutableMethod.validateDownloadedImageCapture(): Int {
 }
 
 /**
- * p0/p1 are adjacent parameter registers. The runtime bridge resolves Messenger's own local
- * File from the validated direct path instead of treating the result Uri path as a filesystem path.
+ * p0/p1 are adjacent parameter registers. The runtime bridge follows Messenger's exact callback
+ * contract: resolve the completed local File from resultUri.getPath(), while retaining the
+ * metadata directPath only as the stable media-archive key.
  */
 internal fun MutableMethod.injectDownloadedImageCapture() {
     val fileResult = validateDownloadedImageCapture()
