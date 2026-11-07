@@ -278,12 +278,15 @@ public final class Settings {
     }
 
     private static final String KEPT_UNSENT_KEY = "kept_unsent_ids";
+    private static final String UNSENT_MODEL_HOOK_HITS = "unsent_model_hook_hits";
+    private static final String UNSENT_MODEL_ID_MISSING = "unsent_model_id_missing";
     private static final String UNSENT_CAPTURE_HITS = "unsent_capture_hits";
     private static final String UNSENT_CAPTURE_SAVED = "unsent_capture_saved";
     private static final String UNSENT_REVOKE_HITS = "unsent_revoke_hits";
     private static final String UNSENT_REVOKE_SAVED = "unsent_revoke_saved";
     private static final String UNSENT_NOTIFICATION_HITS = "unsent_notification_hits";
     private static final String UNSENT_NOTIFICATION_SAVED = "unsent_notification_saved";
+    private static final String UNSENT_MEDIA_CALLBACK_HITS = "unsent_media_callback_hits";
     private static final String UNSENT_MEDIA_HITS = "unsent_media_hits";
     private static final String UNSENT_MEDIA_SAVED = "unsent_media_saved";
     private static final long MAX_UNSENT_IMAGE_BYTES = 40L * 1024 * 1024;
@@ -293,6 +296,16 @@ public final class Settings {
         SharedPreferences prefs = preferences;
         if (prefs == null) return;
         prefs.edit().putLong(key, prefs.getLong(key, 0) + 1).apply();
+    }
+
+    static long unsentModelHookHits() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_MODEL_HOOK_HITS, 0);
+    }
+
+    static long unsentModelIdMissing() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_MODEL_ID_MISSING, 0);
     }
 
     static long unsentCaptureHits() {
@@ -323,6 +336,11 @@ public final class Settings {
     static long unsentNotificationSaved() {
         SharedPreferences prefs = preferences;
         return prefs == null ? 0 : prefs.getLong(UNSENT_NOTIFICATION_SAVED, 0);
+    }
+
+    static long unsentMediaCallbackHits() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_MEDIA_CALLBACK_HITS, 0);
     }
 
     static long unsentMediaHits() {
@@ -507,9 +525,14 @@ public final class Settings {
      * state. The model exposes message_id/thread_key/is_unsent and its nested image metadata.
      */
     public static void captureIncomingQpl(Object qpl) {
-        if (!wouldUse("keep_unsent") || qpl == null) return;
+        if (!wouldUse("keep_unsent")) return;
+        incrementUnsentCounter(UNSENT_MODEL_HOOK_HITS);
+        if (qpl == null) return;
         String messageId = messageModelString(qpl, "A0I");
-        if (messageId == null || messageId.isEmpty()) return;
+        if (messageId == null || messageId.isEmpty()) {
+            incrementUnsentCounter(UNSENT_MODEL_ID_MISSING);
+            return;
+        }
         String threadKey = messageModelString(qpl, "A0L");
         String senderId = messageModelString(qpl, "A0K");
         long messageTimestamp = messageModelLong(qpl, "A0M");
@@ -562,7 +585,9 @@ public final class Settings {
      * A0F(directPath) helper Messenger itself uses in this callback.
      */
     public static void captureDownloadedImageFromCallback(Object downloader, Object result) {
-        if (!wouldUse("keep_unsent") || downloader == null || result == null) return;
+        if (!wouldUse("keep_unsent")) return;
+        incrementUnsentCounter(UNSENT_MEDIA_CALLBACK_HITS);
+        if (downloader == null || result == null) return;
         try {
             Object resultUri = readDeclaredField(result, "A00");
             Object resultError = readDeclaredField(result, "A01");
