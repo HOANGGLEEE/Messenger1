@@ -1,9 +1,12 @@
 package app.hushmessenger.extension;
 
 import android.content.Intent;
+import android.graphics.Insets;
 import android.os.Bundle;
 import android.os.Looper;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.widget.EditText;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -45,6 +48,21 @@ public class SettingsNavigationTest {
                 HostScreens.SCREEN_HOST.equals(opened.getComponent().getClassName()) &&
                 HostScreens.HISTORY.equals(opened.getStringExtra(HostScreens.EXTRA));
             assertTrue("Top navigation should open the dedicated history screen", direct || hosted);
+        }
+    }
+
+    @Test public void historyHeaderAppliesModernStatusBarInset() {
+        try (var screen = Robolectric.buildActivity(UnsentHistoryActivity.class).setup()) {
+            View content = screen.get().getWindow().findViewById(android.R.id.content);
+            View root = ((ViewGroup) content).getChildAt(0);
+            WindowInsets insets = new WindowInsets.Builder()
+                .setInsets(WindowInsets.Type.statusBars(), Insets.of(0, 64, 0, 0))
+                .setInsets(WindowInsets.Type.navigationBars(), Insets.of(0, 0, 0, 72))
+                .build();
+            root.dispatchApplyWindowInsets(insets);
+            int baseTop = Math.round(12 * screen.get().getResources().getDisplayMetrics().density);
+            assertEquals("History content must start below the Android status bar",
+                baseTop + 64, root.getPaddingTop());
         }
     }
 
