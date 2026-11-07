@@ -1244,16 +1244,25 @@ internal fun MutableMethod.validateMessageModelCapture(): Int {
     val strings = code.mapNotNull {
         ((it as? ReferenceInstruction)?.reference as? StringReference)?.string
     }.toSet()
-    val returnIndex = code.indexOfLast { it.opcode == Opcode.RETURN_OBJECT }
-    val result = code.getOrNull(returnIndex) as? OneRegisterInstruction
+    val returns = code.indices.filter { code[it].opcode == Opcode.RETURN_OBJECT }
+    // The last return is a null fallback. Capture on the successful QPL return
+    // immediately after its constructor, not on the final null return.
+    val successReturn = returns.firstOrNull() ?: -1
+    val success = code.getOrNull(successReturn) as? OneRegisterInstruction
+    val constructor = code.getOrNull(successReturn - 1)
+    val nullReturn = code.getOrNull(code.lastIndex) as? OneRegisterInstruction
     if (definingClass != "LX/WXH;" || name != "A0V" || returnType != "LX/QPL;" ||
         !AccessFlags.STATIC.isSet(accessFlags) || parameterTypes != listOf("[B") ||
-        implementation!!.registerCount != 19 || returnIndex != code.lastIndex ||
-        result?.registerA != 0 ||
+        implementation!!.registerCount != 19 || returns.size != 2 ||
+        successReturn != code.lastIndex - 2 || success?.registerA != 0 ||
+        constructor?.opcode != Opcode.INVOKE_DIRECT ||
+        (constructor as? ReferenceInstruction)?.reference?.toString() !=
+            "LX/Pyu;-><init>(LX/933;)V" ||
+        nullReturn?.registerA != 0 ||
         !strings.containsAll(setOf("message_id", "thread_key", "is_unsent", "unsent_timestamp_ms"))) {
         throw PatchException("Messenger controls: verified Messenger 581 message-model parser changed")
     }
-    return returnIndex
+    return successReturn
 }
 
 internal fun MutableMethod.injectMessageModelCapture() {
