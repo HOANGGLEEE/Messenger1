@@ -278,6 +278,7 @@ public final class Settings {
     }
 
     private static final String KEPT_UNSENT_KEY = "kept_unsent_ids";
+    private static final String UNSENT_MODEL_PARSER_ENTRIES = "unsent_model_parser_entries";
     private static final String UNSENT_MODEL_HOOK_HITS = "unsent_model_hook_hits";
     private static final String UNSENT_MODEL_ID_MISSING = "unsent_model_id_missing";
     private static final String UNSENT_CAPTURE_HITS = "unsent_capture_hits";
@@ -296,6 +297,16 @@ public final class Settings {
         SharedPreferences prefs = preferences;
         if (prefs == null) return;
         prefs.edit().putLong(key, prefs.getLong(key, 0) + 1).apply();
+    }
+
+    /** Counts entry into Messenger 581's protobuf parser, before its success/fallback branches. */
+    public static void noteMessageModelParserEntry() {
+        if (wouldUse("keep_unsent")) incrementUnsentCounter(UNSENT_MODEL_PARSER_ENTRIES);
+    }
+
+    static long unsentModelParserEntries() {
+        SharedPreferences prefs = preferences;
+        return prefs == null ? 0 : prefs.getLong(UNSENT_MODEL_PARSER_ENTRIES, 0);
     }
 
     static long unsentModelHookHits() {
