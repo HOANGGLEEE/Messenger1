@@ -146,12 +146,24 @@ public class AntiUnsendStoreTest {
     @Test public void sameMediaIdentityCannotBeLinkedToTwoDifferentMessages() {
         store.captureMediaMetadataForMessage("/cdn/image/collision", "m4", "thread-4",
             4444, "image/jpeg", 100);
-        store.captureMediaMetadataForMessage("/cdn/image/collision", "m5", "thread-5",
-            4444, "image/jpeg", 110);
-        store.markUnsent("m4", 120);
-        store.markUnsent("m5", 130);
-        assertTrue(store.listUnsentMedia("m4").isEmpty());
-        assertTrue(store.listUnsentMedia("m5").isEmpty());
+        java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(), "ambiguous.jpg");
+        try {
+            assertTrue(image.createNewFile());
+            assertTrue(store.saveMediaFile("/cdn/image/collision", 4444, image.getAbsolutePath(), 105));
+            store.captureMediaMetadataForMessage("/cdn/image/collision", "m5", "thread-5",
+                4444, "image/jpeg", 110);
+            store.markUnsent("m4", 120);
+            store.markUnsent("m5", 130);
+            assertTrue(store.listUnsentMedia("m4").isEmpty());
+            assertTrue(store.listUnsentMedia("m5").isEmpty());
+            assertFalse("Ambiguous media must be deleted, not orphaned", image.exists());
+            assertFalse("Ambiguous media must not be relinked", store.saveMediaFile(
+                "/cdn/image/collision", 4444, image.getAbsolutePath(), 140));
+        } catch (java.io.IOException error) {
+            fail(error.getMessage());
+        } finally {
+            image.delete();
+        }
     }
 
     @Test public void mediaIdentityDoesNotDependOnThreadKey() {
