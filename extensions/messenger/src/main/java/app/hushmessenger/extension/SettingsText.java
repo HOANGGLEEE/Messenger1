@@ -227,6 +227,7 @@ final class SettingsText {
         ENGLISH.put("unsent_history_clear_short", "Clear");
         ENGLISH.put("unsent_history_image_unavailable", "This saved image is no longer available.");
         ENGLISH.put("unsent_history_model_diagnostics", "Message-model hook: %d calls, %d missing IDs");
+        ENGLISH.put("unsent_history_parser_diagnostics", "Message parser: %d entries • %d successful model returns");
         ENGLISH.put("unsent_history_callback_diagnostics", "Image callback: %d calls • Valid images: %d • Saved: %d");
         ENGLISH.put("unsent_history_help", "Stored only on this device. Messages appear when Messenger exposes their message ID and unsent state. Photos can be copied only after Messenger downloads them.");
         ENGLISH.put("unsent_history_diagnostics", "Valid message IDs: %d, saved: %d • Unsent marked: %d, stored: %d");
