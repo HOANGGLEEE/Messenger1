@@ -136,6 +136,7 @@ final class SettingsTextVi {
         {"unsent_history_subtitle", "Tin nhắn và ảnh được lưu riêng trên thiết bị này"},
         {"unsent_history_active", "ĐANG BẬT LƯU LỊCH SỬ"},
         {"unsent_history_active_waiting", "ĐANG BẬT • CHƯA NHẬN ĐƯỢC TIN"},
+        {"unsent_history_active_parser_waiting", "ĐANG BẬT • ĐÃ VÀO BỘ PHÂN TÍCH, CHƯA TRẢ MÔ HÌNH"},
         {"unsent_history_inactive", "TÍNH NĂNG ĐANG TẮT"},
         {"unsent_history_summary_messages", "Tin thu hồi"},
         {"unsent_history_summary_images", "Ảnh"},
