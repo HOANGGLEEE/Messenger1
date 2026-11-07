@@ -378,10 +378,15 @@ public final class SettingsActivity extends Activity {
         }
         // Keep the unsent-history entry in the fixed top navigation, not buried in Privacy.
         LinearLayout historyTab = ui.column();
-        Button history = ui.button(text.get("history"));
+        TextView history = ui.text(text.get("history"), 16, ui.muted, false);
         history.setTag("tab_history");
         history.setContentDescription(text.get("unsent_history_title"));
-        history.setTextSize(16);
+        history.setGravity(android.view.Gravity.CENTER);
+        history.setPadding(ui.dp(8), ui.dp(12), ui.dp(8), ui.dp(12));
+        history.setMinHeight(ui.dp(48));
+        history.setFocusable(false);
+        history.setClickable(true);
+        history.setBackground(ui.shape(ui.background, 0, 4));
         history.setOnClickListener(view -> HostScreens.open(this, HostScreens.HISTORY));
         ui.add(historyTab, history, 0);
         View historyUnderline = new View(this);
