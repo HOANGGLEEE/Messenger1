@@ -48,6 +48,36 @@ public class SettingsNavigationTest {
         }
     }
 
+    @Test public void unsentHistoryHasCompactFiltersAndCollapsedDiagnostics() {
+        try (var screen = Robolectric.buildActivity(UnsentHistoryActivity.class).setup()) {
+            View root = screen.get().getWindow().getDecorView();
+            assertNotNull(root.findViewWithTag("unsent_history_status"));
+            assertNotNull(root.findViewWithTag("unsent_history_clear"));
+            assertNotNull(root.findViewWithTag("unsent_history_filter_0"));
+            assertNotNull(root.findViewWithTag("unsent_history_filter_1"));
+            assertNotNull(root.findViewWithTag("unsent_history_filter_2"));
+            assertNotNull(root.findViewWithTag("unsent_history_filter_3"));
+            assertNotNull(root.findViewWithTag("unsent_history_list"));
+            View diagnostics = root.findViewWithTag("unsent_history_diagnostics");
+            assertNotNull(diagnostics);
+            assertEquals(View.GONE, diagnostics.getVisibility());
+            View search = findEditText(root);
+            assertNotNull("History should be searchable", search);
+        }
+    }
+
+    private static View findEditText(View view) {
+        if (view instanceof android.widget.EditText) return view;
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View found = findEditText(group.getChildAt(i));
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
     @Test public void categoriesCombineWithSearchAndClearFiltersRecovers() {
         try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
             View root = screen.get().getWindow().getDecorView();
