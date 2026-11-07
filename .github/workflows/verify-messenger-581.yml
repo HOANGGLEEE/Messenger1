@@ -44,7 +44,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x ./gradlew
-          ./gradlew --no-daemon --stacktrace \
+          ./gradlew --no-daemon --stacktrace --write-verification-metadata sha256 \
             :extensions:messenger:testDebugUnitTest \
             :patches:test \
             :patches:buildAndroid
@@ -54,6 +54,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: messenger-581-image-archive-patch-bundle
-          path: patches/build/libs/*.mpp
+          path: |
+            patches/build/libs/*.mpp
+            gradle/verification-metadata.xml
           if-no-files-found: warn
           retention-days: 7
