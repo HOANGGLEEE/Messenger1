@@ -1,5 +1,6 @@
 package app.hushmessenger.extension;
 
+import android.content.Intent;
 import android.os.Bundle;
 import android.os.Looper;
 import android.view.View;
@@ -24,6 +25,27 @@ public class SettingsNavigationTest {
     @Before public void reset() {
         Settings.initialize(RuntimeEnvironment.getApplication());
         Settings.preferences.edit().clear().commit();
+    }
+
+    @Test public void unsentHistoryIsReachableFromTheFixedTopNavigation() {
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            View root = screen.get().getWindow().getDecorView();
+            View history = root.findViewWithTag("tab_history");
+            assertNotNull("History must be reachable without scrolling to Privacy", history);
+            assertTrue(history.isShown());
+            assertNull("The old buried history link should not be duplicated in the control list",
+                root.findViewWithTag("unsent_history"));
+
+            history.performClick();
+            Intent opened = Shadows.shadowOf(screen.get()).getNextStartedActivity();
+            assertNotNull(opened);
+            boolean direct = opened.getComponent() != null &&
+                UnsentHistoryActivity.class.getName().equals(opened.getComponent().getClassName());
+            boolean hosted = opened.getComponent() != null &&
+                HostScreens.SCREEN_HOST.equals(opened.getComponent().getClassName()) &&
+                HostScreens.HISTORY.equals(opened.getStringExtra(HostScreens.EXTRA));
+            assertTrue("Top navigation should open the dedicated history screen", direct || hosted);
+        }
     }
 
     @Test public void categoriesCombineWithSearchAndClearFiltersRecovers() {
