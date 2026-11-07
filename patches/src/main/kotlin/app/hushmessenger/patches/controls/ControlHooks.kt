@@ -1313,10 +1313,14 @@ internal fun MutableMethod.validateDownloadedImageCapture(): Int {
             (code[index - 1] as? ReferenceInstruction)?.reference?.toString() ==
                 "LX/001;->A0F(Ljava/lang/String;)Ljava/io/File;"
     }
+    val metadataFieldLoad = code.any { instruction ->
+        instruction.opcode == Opcode.IGET_OBJECT &&
+            (instruction as? ReferenceInstruction)?.reference?.toString() == "LX/SUm;->A07:LX/8uu;"
+    }
     if (definingClass != "LX/SUm;" || name != "onCompletion" || returnType != "V" ||
+        AccessFlags.STATIC.isSet(accessFlags) ||
         parameterTypes != listOf("Ljava/lang/Object;") || implementation!!.registerCount != 26 ||
-        fileResult == null ||
-        "LX/SUm;->A07:LX/8uu;" !in references ||
+        fileResult == null || !metadataFieldLoad ||
         "LX/RQz;->A00:Landroid/net/Uri;" !in references ||
         "LX/RQz;->A01:Lcom/facebook/msys/mcf/MsysError;" !in references ||
         "Ljava/io/File;->exists()Z" !in references ||
@@ -1328,14 +1332,14 @@ internal fun MutableMethod.validateDownloadedImageCapture(): Int {
 }
 
 /**
- * Pass existing adjacent parameter registers (p0/p1) to the archive bridge. The previous
- * injection reused v11/v12 even though those are live later as an error code and boolean,
- * which could break Dalvik verification. No Messenger local register is modified here.
+ * p0 is the downloader instance and v19 is the completed local File returned by A0F(directPath).
+ * Pass the actual file, not the result Uri: Uri.getPath() is not guaranteed to be a filesystem path.
+ * The call uses existing registers only and leaves Messenger's live registers untouched.
  */
 internal fun MutableMethod.injectDownloadedImageCapture() {
     val fileResult = validateDownloadedImageCapture()
     addInstructions(fileResult + 1,
-        "invoke-static/range {p0 .. p1}, $SETTINGS->captureDownloadedImageFromCallback(Ljava/lang/Object;Ljava/lang/Object;)V")
+        "invoke-static {p0, v19}, $SETTINGS->captureDownloadedImageFromCallback(Ljava/lang/Object;Ljava/io/File;)V")
 }
 
 internal fun MutableMethod.validateKeepUnsent() {
