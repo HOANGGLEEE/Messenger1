@@ -4,6 +4,7 @@ import android.app.Notification;
 import android.app.Person;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Build;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
@@ -556,22 +557,34 @@ public final class Settings {
     }
 
     /**
-     * Messenger 581 download callback: p0 is SUm (metadata in field A07), and v19 is
-     * the completed local File returned by A0F(directPath). Do not use the callback Uri:
-     * its path component is not guaranteed to be a readable filesystem path.
+     * Messenger 581 download callback: p0 is SUm (metadata in A07), p1 is the result object.
+     * Its Uri is used only to confirm success; the filesystem File is resolved through the same
+     * A0F(directPath) helper Messenger itself uses in this callback.
      */
-    public static void captureDownloadedImageFromCallback(Object downloader, File localFile) {
-        if (!wouldUse("keep_unsent") || downloader == null || localFile == null) return;
+    public static void captureDownloadedImageFromCallback(Object downloader, Object result) {
+        if (!wouldUse("keep_unsent") || downloader == null || result == null) return;
         try {
+            Object resultUri = readDeclaredField(result, "A00");
+            Object resultError = readDeclaredField(result, "A01");
+            if (!(resultUri instanceof Uri) || resultError != null) return;
+
             Object metadata = readDeclaredField(downloader, "A07");
-            if (metadata == null || !localFile.isFile() || !localFile.canRead()) return;
+            if (metadata == null) return;
             Object directPath = readDeclaredField(metadata, "A07");
             Object mime = readDeclaredField(metadata, "A06");
             Object timestamp = readDeclaredField(metadata, "A03");
             if (!(directPath instanceof String) || !(mime instanceof String) ||
                     !(timestamp instanceof Number)) return;
+
+            ClassLoader loader = downloader.getClass().getClassLoader();
+            Class<?> fileHelper = Class.forName("X.001", false, loader);
+            java.lang.reflect.Method resolver = fileHelper.getDeclaredMethod("A0F", String.class);
+            resolver.setAccessible(true);
+            Object resolvedFile = resolver.invoke(null, (String) directPath);
+            if (!(resolvedFile instanceof File)) return;
+
             captureDownloadedImage((String) directPath, (String) mime,
-                ((Number) timestamp).longValue(), localFile.getAbsolutePath());
+                ((Number) timestamp).longValue(), ((File) resolvedFile).getAbsolutePath());
         } catch (Exception error) {
             hookFailedPrivately("keep_unsent", "Can't inspect completed image download", error);
         }
