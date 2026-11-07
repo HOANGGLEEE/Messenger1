@@ -116,7 +116,7 @@ public final class SettingsActivity extends Activity {
         {"bubbles", "Allow chat bubbles", "Choose Stock, Chat Heads or Native Bubbles below. Native Bubbles needs Android 11, account support and notification permissions. Restart Messenger after changing modes.", "links_bubbles"},
         {"allow_screenshot", "Allow screenshots", "Lets you screenshot protected chat media, including view-once media and Quicksnap, and stops screenshot notices. This doesn't add replay or saving.", "privacy"},
         {"hide_read_receipts", "Hide read receipts", "Stops sending read receipts. Opened encrypted chats can stay unread on this phone. Replying or switching this off may notify the sender. Group coverage isn't verified.", "privacy"},
-        {"keep_unsent", "Unsent message history", "Saves a private local text snapshot when a verified receive or render route exposes it, then marks that local record when Messenger reports an unsend. Messenger's own unsend behavior is left unchanged. A notification fallback also keeps up to 30 recent plaintext notification snapshots; those fallback rows are not called unsent because Android notifications do not reliably expose Messenger message IDs. Messenger 580 variant 346013370 has a verified E2EE receive/revoke path; other E2EE builds, media attachments and group coverage are not yet verified.", "privacy"},
+        {"keep_unsent", "Unsent message history", "Saves local text snapshots and marks exact message records when Messenger reports an unsend. Messenger 581 variant 346213510 also copies supported E2EE images after Messenger downloads them to a readable local file; this feature does not start downloads. Notification snapshots remain separate fallback records. Group coverage is not verified.", "privacy"},
         {"anonymous_stories", "View stories anonymously", "Opens other people's stories without adding you to their viewer list. Stories you open this way are still marked as seen on your side.", "privacy"},
         {"save_stories", "Save any story", "Adds Save to the More options menu on other people's stories. The photo or video goes to your phone the same way Messenger saves your own.", "privacy"},
         {"material_you", "Material You theme", "Tints Messenger's dark mode with the colors Android takes from your wallpaper on Android 12 and newer. Android 11 gets a fixed blue palette. Turn on dark mode in Messenger first.", "theme"},
@@ -376,6 +376,18 @@ public final class SettingsActivity extends Activity {
             tabLines.add(underline);
             navigation.addView(tab, new LinearLayout.LayoutParams(0, -2, 1));
         }
+        // Keep the unsent-history entry in the fixed top navigation, not buried in Privacy.
+        LinearLayout historyTab = ui.column();
+        Button history = ui.button(text.get("history"));
+        history.setTag("tab_history");
+        history.setContentDescription(text.get("unsent_history_title"));
+        history.setTextSize(16);
+        history.setOnClickListener(view -> HostScreens.open(this, HostScreens.HISTORY));
+        ui.add(historyTab, history, 0);
+        View historyUnderline = new View(this);
+        historyUnderline.setBackgroundColor(ui.line);
+        historyTab.addView(historyUnderline, new LinearLayout.LayoutParams(-1, ui.dp(2)));
+        navigation.addView(historyTab, new LinearLayout.LayoutParams(0, -2, 1));
         ui.add(header, navigation, 0);
     }
 
@@ -487,15 +499,6 @@ public final class SettingsActivity extends Activity {
                 LinearLayout wrapper = ui.column();
                 ui.add(wrapper, row, 0);
                 addBubbleModes(wrapper);
-                row = wrapper;
-            } else if ("keep_unsent".equals(spec[0])) {
-                LinearLayout wrapper = ui.column();
-                ui.add(wrapper, row, 0);
-                Button history = ui.button(text.get("unsent_history_title"));
-                history.setTag("unsent_history");
-                history.setOnClickListener(view -> HostScreens.open(this, HostScreens.HISTORY));
-                ui.add(wrapper, history, 8);
-                ui.add(wrapper, ui.text(text.get("unsent_history_entry_help"), 13, ui.muted, false), 8);
                 row = wrapper;
             }
             row.setTag(spec[3]);
