@@ -1323,6 +1323,7 @@ internal fun MutableMethod.validateDownloadedImageCapture(): Int {
         fileResult == null || !metadataFieldLoad ||
         "LX/RQz;->A00:Landroid/net/Uri;" !in references ||
         "LX/RQz;->A01:Lcom/facebook/msys/mcf/MsysError;" !in references ||
+        "Landroid/net/Uri;->getPath()Ljava/lang/String;" !in references ||
         "Ljava/io/File;->exists()Z" !in references ||
         "Ljava/io/File;->canRead()Z" !in references ||
         "Ljava/io/File;->length()J" !in references) {
