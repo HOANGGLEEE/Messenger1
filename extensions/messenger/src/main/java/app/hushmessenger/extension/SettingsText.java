@@ -207,6 +207,7 @@ final class SettingsText {
         ENGLISH.put("unsent_history_subtitle", "Your saved messages and photos, stored on this device");
         ENGLISH.put("unsent_history_active", "HISTORY CAPTURE ON");
         ENGLISH.put("unsent_history_active_waiting", "ON • WAITING FOR MESSAGE DATA");
+        ENGLISH.put("unsent_history_active_parser_waiting", "ON • PARSER RAN, NO MODEL RETURN YET");
         ENGLISH.put("unsent_history_inactive", "HISTORY CAPTURE OFF");
         ENGLISH.put("unsent_history_summary_messages", "Unsent");
         ENGLISH.put("unsent_history_summary_images", "Photos");
