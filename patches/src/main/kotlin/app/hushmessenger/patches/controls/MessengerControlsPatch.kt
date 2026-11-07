@@ -276,6 +276,16 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
                 }
                 parser
             } else null
+            // Messenger 581 normally uses the native StAX/Pando deserializer. A0V above is
+            // only the dynamic protobuf fallback, so hook both verified parser paths.
+            val messenger581NativeMessageCapture = if (key == "keep_unsent" && packageMetadata.versionCode == "346213510") {
+                val nativeParser = mutableClassDefBy("LX/1Tn;").methods.singleOrNull { method ->
+                    method.name == "A00" && method.returnType == "LX/QPL;" &&
+                        method.parameterTypes == listOf("[B")
+                } ?: throw PatchException("Keep unsent: Messenger 581 native message-model parser is missing")
+                nativeParser.validateNativeMessageModelCapture()
+                nativeParser
+            } else null
             val messenger581ImageCapture = if (key == "keep_unsent" && packageMetadata.versionCode == "346213510") {
                 val callback = mutableClassDefBy("LX/SUm;").methods.singleOrNull { method ->
                     method.name == "onCompletion" && method.returnType == "V" &&
@@ -319,6 +329,7 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
                     deleting.injectE2eeDeleteCapture()
                 }
                 messenger581MessageCapture?.injectMessageModelCapture()
+                messenger581NativeMessageCapture?.injectNativeMessageModelCapture()
                 messenger581ImageCapture?.injectDownloadedImageCapture()
                 if (key == "keep_unsent") {
                     notificationCaptureMethods.forEach { (className, methodId) ->
