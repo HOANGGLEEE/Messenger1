@@ -1276,6 +1276,54 @@ internal fun MutableMethod.injectMessageModelCapture() {
 }
 
 /**
+ * Messenger 581's normal "native" / "dynamic_fallback" path parses message fragments through
+ * StaxMessageNativeDeserializerJNI. The A0V protobuf parser above is only the dynamic fallback;
+ * it is not the parser entered by the native path used by MDCore's message hydration.
+ *
+ * Pin the native method's exact descriptor, JNI call, QPL allocation and success/null returns.
+ * Capture only the successfully constructed QPL, never the null fallback.
+ */
+internal fun MutableMethod.validateNativeMessageModelCapture(): Int {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: native message-model parser has no code")
+    val references = code.mapNotNull {
+        (it as? ReferenceInstruction)?.reference?.toString()
+    }.toSet()
+    val strings = code.mapNotNull {
+        ((it as? ReferenceInstruction)?.reference as? StringReference)?.string
+    }.toSet()
+    val returns = code.indices.filter { code[it].opcode == Opcode.RETURN_OBJECT }
+    val successReturn = returns.firstOrNull() ?: -1
+    val success = code.getOrNull(successReturn) as? OneRegisterInstruction
+    val constructor = code.getOrNull(successReturn - 1)
+    val allocation = code.getOrNull(successReturn - 2) as? ReferenceInstruction
+    val nullReturn = code.getOrNull(code.lastIndex) as? OneRegisterInstruction
+    if (definingClass != "LX/1Tn;" || name != "A00" || returnType != "LX/QPL;" ||
+        !AccessFlags.STATIC.isSet(accessFlags) || parameterTypes != listOf("[B") ||
+        implementation!!.registerCount != 4 || returns.size != 2 ||
+        successReturn != code.lastIndex - 2 || success?.registerA != 0 ||
+        constructor?.opcode != Opcode.INVOKE_DIRECT ||
+        (constructor as? ReferenceInstruction)?.reference?.toString() !=
+            "LX/Pyu;-><init>(LX/933;)V" ||
+        allocation?.reference?.toString() != "LX/QPL;" ||
+        nullReturn?.registerA != 0 ||
+        "modularsync-minimal-android" !in strings ||
+        "Lcom/facebook/xapp/messaging/modularsync/message/parser/nativedeserializer/StaxMessageNativeDeserializerJNI;->deserializeNative([BILjava/lang/String;Lcom/facebook/pando/PandoBuildConfigFlatbufferAssetReaderJNI;)Lcom/facebook/pando/TreeJNI;" !in references ||
+        "LX/33S;->A0j(Ljava/lang/Object;)V" !in references) {
+        throw PatchException("Messenger controls: verified Messenger 581 native message-model parser changed")
+    }
+    return successReturn
+}
+
+internal fun MutableMethod.injectNativeMessageModelCapture() {
+    val returnIndex = validateNativeMessageModelCapture()
+    addInstructions(returnIndex,
+        "invoke-static {v0}, $SETTINGS->captureIncomingQpl(Ljava/lang/Object;)V")
+    addInstructions(0,
+        "invoke-static {}, $SETTINGS->noteMessageModelParserEntry()V")
+}
+
+/**
  * Validate the generated image converter that exposes the main E2EE direct path and media-key
  * timestamp. Preview paths are deliberately not used as substitutes for the original image.
  */
