@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: verify-messenger-581-${{ github.ref }}
@@ -38,6 +39,9 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Run extension tests, patch tests and Android bundle build
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x ./gradlew
           ./gradlew --no-daemon --stacktrace \
