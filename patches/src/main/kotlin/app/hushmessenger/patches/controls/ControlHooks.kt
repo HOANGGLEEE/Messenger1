@@ -1332,14 +1332,13 @@ internal fun MutableMethod.validateDownloadedImageCapture(): Int {
 }
 
 /**
- * p0 is the downloader instance and v19 is the completed local File returned by A0F(directPath).
- * Pass the actual file, not the result Uri: Uri.getPath() is not guaranteed to be a filesystem path.
- * The call uses existing registers only and leaves Messenger's live registers untouched.
+ * p0/p1 are adjacent parameter registers. The runtime bridge resolves Messenger's own local
+ * File from the validated direct path instead of treating the result Uri path as a filesystem path.
  */
 internal fun MutableMethod.injectDownloadedImageCapture() {
     val fileResult = validateDownloadedImageCapture()
     addInstructions(fileResult + 1,
-        "invoke-static {p0, v19}, $SETTINGS->captureDownloadedImageFromCallback(Ljava/lang/Object;Ljava/io/File;)V")
+        "invoke-static/range {p0 .. p1}, $SETTINGS->captureDownloadedImageFromCallback(Ljava/lang/Object;Ljava/lang/Object;)V")
 }
 
 internal fun MutableMethod.validateKeepUnsent() {
