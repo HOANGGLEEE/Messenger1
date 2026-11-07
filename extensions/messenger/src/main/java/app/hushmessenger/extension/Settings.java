@@ -4,7 +4,6 @@ import android.app.Notification;
 import android.app.Person;
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.net.Uri;
 import android.os.Build;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
@@ -451,22 +450,40 @@ public final class Settings {
 
     private static Object invokeModelGetter(Object target, String name) {
         if (target == null) return null;
-        try {
-            return target.getClass().getMethod(name).invoke(target);
-        } catch (Exception ignored) {
-            return null;
+        Class<?> owner = target.getClass();
+        while (owner != null) {
+            try {
+                java.lang.reflect.Method method = owner.getDeclaredMethod(name);
+                method.setAccessible(true);
+                return method.invoke(target);
+            } catch (NoSuchMethodException ignored) {
+                owner = owner.getSuperclass();
+            } catch (Exception ignored) {
+                return null;
+            }
         }
+        return null;
     }
 
     private static Object readMessageModelValue(Object wrapper, String getter, int key) {
         if (wrapper == null) return null;
         try {
-            Object model = wrapper.getClass().getField("A00").get(wrapper);
+            Object model = readDeclaredField(wrapper, "A00");
             if (model == null) return null;
-            return model.getClass().getMethod(getter, int.class).invoke(model, key);
+            Class<?> owner = model.getClass();
+            while (owner != null) {
+                try {
+                    java.lang.reflect.Method method = owner.getDeclaredMethod(getter, int.class);
+                    method.setAccessible(true);
+                    return method.invoke(model, key);
+                } catch (NoSuchMethodException ignored) {
+                    owner = owner.getSuperclass();
+                }
+            }
         } catch (Exception ignored) {
-            return null;
+            // A model field can be absent on partial or non-image messages.
         }
+        return null;
     }
 
     private static String messageModelString(Object target, String getter) {
