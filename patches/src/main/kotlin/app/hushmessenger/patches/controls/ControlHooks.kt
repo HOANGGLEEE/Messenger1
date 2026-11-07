@@ -1304,48 +1304,29 @@ internal fun MutableMethod.validateDownloadedImageCapture(): Int {
             (code[index - 1] as? ReferenceInstruction)?.reference?.toString() ==
                 "LX/001;->A0F(Ljava/lang/String;)Ljava/io/File;"
     }
-    val metadataLoad = code.indices.any { index ->
-        val instruction = code[index]
-        instruction.opcode == Opcode.IGET_OBJECT &&
-            (instruction as? TwoRegisterInstruction)?.registerA == 4 &&
-            (instruction as? ReferenceInstruction)?.reference?.toString() == "LX/SUm;->A07:LX/8uu;"
-    }
-    val scratchRegistersUsedLater = fileResult != null && code.drop(fileResult + 1).any {
-        it.toString().contains("v11") || it.toString().contains("v12")
-    }
     if (definingClass != "LX/SUm;" || name != "onCompletion" || returnType != "V" ||
         parameterTypes != listOf("Ljava/lang/Object;") || implementation!!.registerCount != 26 ||
-        fileResult == null || !metadataLoad || scratchRegistersUsedLater ||
+        fileResult == null ||
         "LX/SUm;->A07:LX/8uu;" !in references ||
+        "LX/RQz;->A00:Landroid/net/Uri;" !in references ||
+        "LX/RQz;->A01:Lcom/facebook/msys/mcf/MsysError;" !in references ||
         "Ljava/io/File;->exists()Z" !in references ||
         "Ljava/io/File;->canRead()Z" !in references ||
-        "Ljava/io/File;->length()J" !in references ||
-        "Ljava/io/File;->delete()Z" !in references) {
+        "Ljava/io/File;->length()J" !in references) {
         throw PatchException("Messenger controls: verified Messenger 581 downloaded-image callback changed")
     }
     return fileResult
 }
 
+/**
+ * Pass existing adjacent parameter registers (p0/p1) to the archive bridge. The previous
+ * injection reused v11/v12 even though those are live later as an error code and boolean,
+ * which could break Dalvik verification. No Messenger local register is modified here.
+ */
 internal fun MutableMethod.injectDownloadedImageCapture() {
     val fileResult = validateDownloadedImageCapture()
-    addInstructionsWithLabels(fileResult + 1, """
-        invoke-static {}, $SETTINGS->keepUnsent()Z
-        move-result v0
-        if-eqz v0, :hush_581_image_capture_done
-        if-eqz v19, :hush_581_image_capture_done
-        if-eqz v4, :hush_581_image_capture_done
-        move-object v11, v1
-        move-object v12, v5
-        iget-object v0, v4, LX/8uu;->A07:Ljava/lang/String;
-        iget-object v1, v4, LX/8uu;->A06:Ljava/lang/String;
-        iget-wide v2, v4, LX/8uu;->A03:J
-        invoke-virtual {v19}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
-        move-result-object v5
-        invoke-static {v0, v1, v2, v3, v5}, $SETTINGS->captureDownloadedImage(Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;)V
-        move-object v1, v11
-        move-object v5, v12
-        :hush_581_image_capture_done
-    """.trimIndent())
+    addInstructions(fileResult + 1,
+        "invoke-static/range {p0 .. p1}, $SETTINGS->captureDownloadedImageFromCallback(Ljava/lang/Object;Ljava/lang/Object;)V")
 }
 
 internal fun MutableMethod.validateKeepUnsent() {
