@@ -593,6 +593,11 @@ public final class Settings {
             Object resultError = readDeclaredField(result, "A01");
             if (!(resultUri instanceof Uri) || resultError != null) return;
 
+            // Messenger's own callback resolves the completed local file from resultUri.getPath().
+            // The metadata directPath is an archive key, not the local filesystem path.
+            String localPath = ((Uri) resultUri).getPath();
+            if (localPath == null || localPath.isEmpty()) return;
+
             Object metadata = readDeclaredField(downloader, "A07");
             if (metadata == null) return;
             Object directPath = readDeclaredField(metadata, "A07");
@@ -605,7 +610,7 @@ public final class Settings {
             Class<?> fileHelper = Class.forName("X.001", false, loader);
             java.lang.reflect.Method resolver = fileHelper.getDeclaredMethod("A0F", String.class);
             resolver.setAccessible(true);
-            Object resolvedFile = resolver.invoke(null, (String) directPath);
+            Object resolvedFile = resolver.invoke(null, localPath);
             if (!(resolvedFile instanceof File)) return;
 
             captureDownloadedImage((String) directPath, (String) mime,
