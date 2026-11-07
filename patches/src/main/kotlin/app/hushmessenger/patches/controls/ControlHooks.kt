@@ -1267,8 +1267,12 @@ internal fun MutableMethod.validateMessageModelCapture(): Int {
 
 internal fun MutableMethod.injectMessageModelCapture() {
     val returnIndex = validateMessageModelCapture()
+    // Count parser entry separately from successful QPL returns. This distinguishes a receive
+    // route that never runs from a parser that runs but takes its null/error fallback.
     addInstructions(returnIndex,
         "invoke-static {v0}, $SETTINGS->captureIncomingQpl(Ljava/lang/Object;)V")
+    addInstructions(0,
+        "invoke-static {}, $SETTINGS->noteMessageModelParserEntry()V")
 }
 
 /**
