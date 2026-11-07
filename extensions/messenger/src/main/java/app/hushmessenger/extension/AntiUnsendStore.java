@@ -216,20 +216,24 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         long inserted = db.insertWithOnConflict("media", null, values, SQLiteDatabase.CONFLICT_IGNORE);
         if (inserted == -1) {
             String existingMessageId = null;
+            String existingLocalPath = null;
             long existingUnsentAt = 0;
-            try (Cursor cursor = db.query("media", new String[] {"message_id", "unsent_at"},
+            try (Cursor cursor = db.query("media", new String[] {"message_id", "unsent_at", "local_path"},
                     "media_key=?", new String[] {key}, null, null, null, "1")) {
                 if (cursor.moveToFirst()) {
                     if (!cursor.isNull(0)) existingMessageId = cursor.getString(0);
                     if (!cursor.isNull(1)) existingUnsentAt = cursor.getLong(1);
+                    if (!cursor.isNull(2)) existingLocalPath = cursor.getString(2);
                 }
             }
             if (existingMessageId != null && existingMessageId.isEmpty()) {
                 // A previously detected direct-path collision remains unresolved.
             } else if (existingMessageId != null && !existingMessageId.equals(messageId)) {
+                if (existingLocalPath != null) new File(existingLocalPath).delete();
                 ContentValues ambiguous = new ContentValues();
                 ambiguous.put("message_id", "");
                 ambiguous.putNull("unsent_at");
+                ambiguous.putNull("local_path");
                 ambiguous.put("last_seen_at", now);
                 db.update("media", ambiguous, "media_key=?", new String[] {key});
             } else {
@@ -287,7 +291,10 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         values.put("local_path", localPath);
         values.put("last_seen_at", now);
         SQLiteDatabase db = getWritableDatabase();
-        int updated = db.update("media", values, "media_key=?",
+        // Empty message_id is a deliberate ambiguity marker set when one media identity
+        // appears on two different messages. Never archive/display that file as an exact match.
+        int updated = db.update("media", values,
+            "media_key=? AND (message_id IS NULL OR message_id!='')",
             new String[] {mediaKey(directPath, mediaKeyTimestamp)});
         pruneOccasionally(db, now);
         return updated > 0;
