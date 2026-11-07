@@ -202,6 +202,8 @@ final class SettingsText {
         ENGLISH.put("not_active", "Nothing to change yet since restart");
         ENGLISH.put("unsent_not_active", "No unsend activity observed since restart");
         ENGLISH.put("unsent_history_title", "Unsent history");
+        ENGLISH.put("unsent_history_entry_help", "Open your locally saved messages and photos.");
+
         ENGLISH.put("unsent_history_subtitle", "Your saved messages and photos, stored on this device");
         ENGLISH.put("unsent_history_active", "HISTORY CAPTURE ON");
         ENGLISH.put("unsent_history_inactive", "HISTORY CAPTURE OFF");
@@ -226,9 +228,9 @@ final class SettingsText {
         ENGLISH.put("unsent_history_model_diagnostics", "Message-model hook: %d calls, %d missing IDs");
         ENGLISH.put("unsent_history_callback_diagnostics", "Image callback: %d calls • Valid images: %d • Saved: %d");
         ENGLISH.put("unsent_history_help", "Stored only on this device. Messages appear when Messenger exposes their message ID and unsent state. Photos can be copied only after Messenger downloads them.");
-        ENGLISH.put("unsent_history_diagnostics", "Capture hook: %d, saved: %d • Revoke hook: %d, marked: %d");
+        ENGLISH.put("unsent_history_diagnostics", "Valid message IDs: %d, saved: %d • Unsent marked: %d, stored: %d");
         ENGLISH.put("unsent_history_notification_diagnostics", "Notification fallback: %d hooks, %d new snapshots");
-        ENGLISH.put("unsent_history_media_diagnostics", "Image capture: %d callbacks, %d saved locally");
+        ENGLISH.put("unsent_history_media_diagnostics", "Valid images: %d, saved locally: %d");
         ENGLISH.put("unsent_history_image_description", "Image attachment saved locally before the message was unsent");
         ENGLISH.put("unsent_history_confirmed_section", "Matched unsent messages");
         ENGLISH.put("unsent_history_notification_section", "Recent notification snapshots");
