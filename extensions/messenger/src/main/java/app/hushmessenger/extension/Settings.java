@@ -604,14 +604,21 @@ public final class Settings {
                 String extension = imageExtension(mimeType);
                 File destination = new File(directory, key + "." + extension);
                 if (destination.isFile() && destination.length() > 0) {
-                    String destinationPath = destination.getAbsolutePath();
-                    boolean alreadyLinked = destinationPath.equals(
-                        store.mediaLocalPath(directPath, mediaKeyTimestamp));
-                    if (store.saveMediaFile(directPath, mediaKeyTimestamp,
-                            destinationPath, System.currentTimeMillis()) && !alreadyLinked) {
-                        incrementUnsentCounter(UNSENT_MEDIA_SAVED);
+                    if (hasImageFileSignature(destination, mimeType)) {
+                        String destinationPath = destination.getAbsolutePath();
+                        boolean alreadyLinked = destinationPath.equals(
+                            store.mediaLocalPath(directPath, mediaKeyTimestamp));
+                        if (store.saveMediaFile(directPath, mediaKeyTimestamp,
+                                destinationPath, System.currentTimeMillis())) {
+                            if (!alreadyLinked) incrementUnsentCounter(UNSENT_MEDIA_SAVED);
+                        } else {
+                            destination.delete();
+                        }
+                        return;
                     }
-                    return;
+                    if (!destination.delete()) {
+                        throw new java.io.IOException("Can't replace invalid archived image");
+                    }
                 }
 
                 temporary = new File(directory, key + ".tmp");
