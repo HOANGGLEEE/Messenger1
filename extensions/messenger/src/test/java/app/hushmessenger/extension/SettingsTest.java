@@ -250,14 +250,22 @@ public class SettingsTest {
         assertEquals(2, Settings.unsentNotificationSaved());
     }
 
-    @Test public void settingsExposeLocalUnsentHistory() {
+    @Test public void settingsExposeLocalUnsentHistoryFromFixedNavigation() {
         try (var controller = Robolectric.buildActivity(SettingsActivity.class).setup()) {
-            View history = controller.get().getWindow().getDecorView().findViewWithTag("unsent_history");
-            assertNotNull(history);
+            View history = controller.get().getWindow().getDecorView().findViewWithTag("tab_history");
+            assertNotNull("History is a fixed top-level destination", history);
+            assertTrue(history.isShown());
+            assertNull("History is no longer buried in the Privacy settings", 
+                controller.get().getWindow().getDecorView().findViewWithTag("unsent_history"));
             history.performClick();
             Intent launched = Shadows.shadowOf(controller.get()).getNextStartedActivity();
             assertNotNull(launched);
-            assertEquals(UnsentHistoryActivity.class.getName(), launched.getComponent().getClassName());
+            boolean direct = launched.getComponent() != null &&
+                UnsentHistoryActivity.class.getName().equals(launched.getComponent().getClassName());
+            boolean hosted = launched.getComponent() != null &&
+                HostScreens.SCREEN_HOST.equals(launched.getComponent().getClassName()) &&
+                HostScreens.HISTORY.equals(launched.getStringExtra(HostScreens.EXTRA));
+            assertTrue("History navigation opens the dedicated history screen", direct || hosted);
         }
     }
 
