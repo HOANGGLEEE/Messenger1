@@ -587,70 +587,70 @@ public final class Settings {
         synchronized (UNSENT_MEDIA_ARCHIVE_LOCK) {
             File temporary = null;
             try {
-            File source = new File(sourcePath);
-            long sourceLength = source.length();
-            if (!source.isFile() || !source.canRead() || sourceLength <= 0 ||
-                    sourceLength > MAX_UNSENT_IMAGE_BYTES) return;
-            if (!hasImageFileSignature(source, mimeType)) return;
+                File source = new File(sourcePath);
+                long sourceLength = source.length();
+                if (!source.isFile() || !source.canRead() || sourceLength <= 0 ||
+                        sourceLength > MAX_UNSENT_IMAGE_BYTES) return;
+                if (!hasImageFileSignature(source, mimeType)) return;
 
-            String key = AntiUnsendStore.mediaKey(directPath, mediaKeyTimestamp);
-            if (key == null) return;
-            AntiUnsendStore store = AntiUnsendStore.get(context);
-            store.captureMediaMetadata(directPath, mediaKeyTimestamp, mimeType,
-                System.currentTimeMillis());
+                String key = AntiUnsendStore.mediaKey(directPath, mediaKeyTimestamp);
+                if (key == null) return;
+                AntiUnsendStore store = AntiUnsendStore.get(context);
+                store.captureMediaMetadata(directPath, mediaKeyTimestamp, mimeType,
+                    System.currentTimeMillis());
 
-            File directory = new File(context.getFilesDir(), "hush_unsent_media");
-            if (!directory.isDirectory() && !directory.mkdirs()) {
-                throw new java.io.IOException("Can't create private media directory");
-            }
-            String extension = imageExtension(mimeType);
-            File destination = new File(directory, key + "." + extension);
-            if (destination.isFile() && destination.length() > 0) {
-                String destinationPath = destination.getAbsolutePath();
-                boolean alreadyLinked = destinationPath.equals(
-                    store.mediaLocalPath(directPath, mediaKeyTimestamp));
-                if (store.saveMediaFile(directPath, mediaKeyTimestamp,
-                        destinationPath, System.currentTimeMillis()) && !alreadyLinked) {
-                    incrementUnsentCounter(UNSENT_MEDIA_SAVED);
+                File directory = new File(context.getFilesDir(), "hush_unsent_media");
+                if (!directory.isDirectory() && !directory.mkdirs()) {
+                    throw new java.io.IOException("Can't create private media directory");
                 }
-                return;
-            }
-
-            temporary = new File(directory, key + ".tmp");
-            if (temporary.exists() && !temporary.delete()) {
-                throw new java.io.IOException("Can't replace temporary image");
-            }
-            long copied = 0;
-            byte[] buffer = new byte[16 * 1024];
-            try (FileInputStream input = new FileInputStream(source);
-                 FileOutputStream output = new FileOutputStream(temporary)) {
-                int count;
-                while ((count = input.read(buffer)) != -1) {
-                    copied += count;
-                    if (copied > MAX_UNSENT_IMAGE_BYTES) {
-                        throw new java.io.IOException("Image exceeds local archive limit");
+                String extension = imageExtension(mimeType);
+                File destination = new File(directory, key + "." + extension);
+                if (destination.isFile() && destination.length() > 0) {
+                    String destinationPath = destination.getAbsolutePath();
+                    boolean alreadyLinked = destinationPath.equals(
+                        store.mediaLocalPath(directPath, mediaKeyTimestamp));
+                    if (store.saveMediaFile(directPath, mediaKeyTimestamp,
+                            destinationPath, System.currentTimeMillis()) && !alreadyLinked) {
+                        incrementUnsentCounter(UNSENT_MEDIA_SAVED);
                     }
-                    output.write(buffer, 0, count);
+                    return;
                 }
-                output.flush();
-                output.getFD().sync();
-            }
-            if (copied != sourceLength || copied == 0) {
-                throw new java.io.IOException("Downloaded image changed while being copied");
-            }
-            if (destination.exists() && !destination.delete()) {
-                throw new java.io.IOException("Can't replace archived image");
-            }
-            if (!temporary.renameTo(destination)) {
-                throw new java.io.IOException("Can't move image into private storage");
-            }
-            temporary = null;
-            if (!store.saveMediaFile(directPath, mediaKeyTimestamp,
-                    destination.getAbsolutePath(), System.currentTimeMillis())) {
-                destination.delete();
-                return;
-            }
-            incrementUnsentCounter(UNSENT_MEDIA_SAVED);
+
+                temporary = new File(directory, key + ".tmp");
+                if (temporary.exists() && !temporary.delete()) {
+                    throw new java.io.IOException("Can't replace temporary image");
+                }
+                long copied = 0;
+                byte[] buffer = new byte[16 * 1024];
+                try (FileInputStream input = new FileInputStream(source);
+                     FileOutputStream output = new FileOutputStream(temporary)) {
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        copied += count;
+                        if (copied > MAX_UNSENT_IMAGE_BYTES) {
+                            throw new java.io.IOException("Image exceeds local archive limit");
+                        }
+                        output.write(buffer, 0, count);
+                    }
+                    output.flush();
+                    output.getFD().sync();
+                }
+                if (copied != sourceLength || copied == 0) {
+                    throw new java.io.IOException("Downloaded image changed while being copied");
+                }
+                if (destination.exists() && !destination.delete()) {
+                    throw new java.io.IOException("Can't replace archived image");
+                }
+                if (!temporary.renameTo(destination)) {
+                    throw new java.io.IOException("Can't move image into private storage");
+                }
+                temporary = null;
+                if (!store.saveMediaFile(directPath, mediaKeyTimestamp,
+                        destination.getAbsolutePath(), System.currentTimeMillis())) {
+                    destination.delete();
+                    return;
+                }
+                incrementUnsentCounter(UNSENT_MEDIA_SAVED);
             } catch (Exception error) {
                 if (temporary != null) temporary.delete();
                 hookFailedPrivately("keep_unsent", "Can't save downloaded image for local history", error);
