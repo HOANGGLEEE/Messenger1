@@ -241,9 +241,13 @@ public final class UnsentHistoryActivity extends Activity {
         summaryImages.setText(Integer.toString(imageCount));
         summaryNotifications.setText(Integer.toString(notificationEntries.size()));
         boolean active = Settings.keepUnsent();
-        status.setText(text.get(active ? "unsent_history_active" : "unsent_history_inactive"));
-        status.setTextColor(active ? (ui.background == 0xff000000 ? 0xff83d6a8 : 0xff18794e) : ui.warning);
-        status.setBackground(ui.shape(active
+        boolean modelSeen = Settings.unsentModelHookHits() > 0 || Settings.unsentCaptureHits() > 0;
+        String state = !active ? "unsent_history_inactive" :
+            modelSeen ? "unsent_history_active" : "unsent_history_active_waiting";
+        boolean healthy = active && modelSeen;
+        status.setText(text.get(state));
+        status.setTextColor(healthy ? (ui.background == 0xff000000 ? 0xff83d6a8 : 0xff18794e) : ui.warning);
+        status.setBackground(ui.shape(healthy
             ? (ui.background == 0xff000000 ? 0xff123325 : 0xffe5f5ec)
             : ui.warningSurface, ui.line, 20));
     }
