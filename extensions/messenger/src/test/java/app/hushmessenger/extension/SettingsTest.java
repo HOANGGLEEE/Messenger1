@@ -68,6 +68,16 @@ public class SettingsTest {
         assertTrue(Settings.hideStories());
     }
 
+    @Test public void messageModelParserEntryCounterOnlyAdvancesWhenCaptureIsEnabled() {
+        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
+        Settings.noteMessageModelParserEntry();
+        assertEquals(1, Settings.unsentModelParserEntries());
+
+        Settings.preferences.edit().putBoolean("paused", true).commit();
+        Settings.noteMessageModelParserEntry();
+        assertEquals(1, Settings.unsentModelParserEntries());
+    }
+
     @Test @Config(sdk = {28, 36}) public void legacyUnsendHelpersRecordHistoryWithoutChangingMessengerState() {
         Settings.activeAt.clear();
         Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
