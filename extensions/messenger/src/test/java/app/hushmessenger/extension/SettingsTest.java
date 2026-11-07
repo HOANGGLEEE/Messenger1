@@ -74,17 +74,18 @@ public class SettingsTest {
         assertTrue(Settings.keepUnsent());
         assertEquals("Eligibility is not an interception", 0, Settings.lastActive("keep_unsent"));
 
-        // The render hook may cache plaintext for local history, but it must return Messenger's value unchanged.
+        // The render hook may cache plaintext for local history. The unsent predicate records
+        // true values, but always returns Messenger's original value unchanged.
         assertEquals("ordinary text", Settings.labelKeptUnsent("ordinary text", "other-message"));
         assertTrue(Settings.suppressUnsent(true, "other-message"));
-        assertFalse(Settings.suppressUnsent(false, "other-message"));
-        assertEquals("Ordinary message reads are not interceptions", 0, Settings.lastActive("keep_unsent"));
+        assertFalse(Settings.suppressUnsent(false, "not-unsent"));
+        assertEquals("Observation does not change the predicate result", 0, Settings.lastActive("keep_unsent"));
 
         Settings.recordUnsent("retained-message");
         assertTrue(Settings.lastActive("keep_unsent") > 0);
         Settings.recordUnsent(null);
         Settings.recordUnsent("");
-        assertEquals(java.util.Set.of("retained-message"),
+        assertEquals(java.util.Set.of("other-message", "retained-message"),
             Settings.preferences.getStringSet("kept_unsent_ids", java.util.Set.of()));
         assertTrue(Settings.isKeptUnsent("retained-message"));
         assertFalse(Settings.isKeptUnsent(null));
