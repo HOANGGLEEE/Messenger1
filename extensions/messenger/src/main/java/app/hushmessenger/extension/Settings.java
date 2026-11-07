@@ -287,6 +287,7 @@ public final class Settings {
     private static final String UNSENT_MEDIA_HITS = "unsent_media_hits";
     private static final String UNSENT_MEDIA_SAVED = "unsent_media_saved";
     private static final long MAX_UNSENT_IMAGE_BYTES = 40L * 1024 * 1024;
+    private static final Object UNSENT_MEDIA_ARCHIVE_LOCK = new Object();
 
     private static synchronized void incrementUnsentCounter(String key) {
         SharedPreferences prefs = preferences;
@@ -583,8 +584,9 @@ public final class Settings {
         incrementUnsentCounter(UNSENT_MEDIA_HITS);
         Context context = appContext;
         if (context == null) return;
-        File temporary = null;
-        try {
+        synchronized (UNSENT_MEDIA_ARCHIVE_LOCK) {
+            File temporary = null;
+            try {
             File source = new File(sourcePath);
             long sourceLength = source.length();
             if (!source.isFile() || !source.canRead() || sourceLength <= 0 ||
@@ -649,9 +651,10 @@ public final class Settings {
                 return;
             }
             incrementUnsentCounter(UNSENT_MEDIA_SAVED);
-        } catch (Exception error) {
-            if (temporary != null) temporary.delete();
-            hookFailedPrivately("keep_unsent", "Can't save downloaded image for local history", error);
+            } catch (Exception error) {
+                if (temporary != null) temporary.delete();
+                hookFailedPrivately("keep_unsent", "Can't save downloaded image for local history", error);
+            }
         }
     }
 
