@@ -77,6 +77,7 @@ final class SettingsText {
     static {
         ENGLISH.put("controls", "Controls");
         ENGLISH.put("app", "App");
+        ENGLISH.put("history", "History");
         ENGLISH.put("all", "All");
         ENGLISH.put("inbox", "Inbox");
         ENGLISH.put("chats", "Chats");
