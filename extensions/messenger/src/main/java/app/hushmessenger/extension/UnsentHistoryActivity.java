@@ -3,6 +3,7 @@ package app.hushmessenger.extension;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.os.Bundle;
+import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.view.View;
 import android.widget.Button;
