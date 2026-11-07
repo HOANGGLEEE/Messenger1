@@ -156,6 +156,7 @@ final class SettingsTextVi {
         {"unsent_history_clear_short", "Xóa"},
         {"unsent_history_image_unavailable", "Ảnh đã lưu hiện không còn khả dụng."},
         {"unsent_history_model_diagnostics", "Hook mô hình tin nhắn: %d lần, %d lần thiếu ID"},
+        {"unsent_history_parser_diagnostics", "Parser nhận tin: %d lần vào • %d lần trả mô hình thành công"},
         {"unsent_history_callback_diagnostics", "Callback ảnh: %d lần • Ảnh hợp lệ: %d • Đã lưu: %d"},
         {"unsent_history_help", "Lưu riêng trên thiết bị này. Tin nhắn cần có ID và trạng thái thu hồi do Messenger cung cấp. Ảnh chỉ được sao chép sau khi Messenger tải xuống."},
         {"unsent_history_diagnostics", "ID tin nhắn hợp lệ: %d, đã lưu: %d • Tin đã thu hồi: %d, đã ghi: %d"},
