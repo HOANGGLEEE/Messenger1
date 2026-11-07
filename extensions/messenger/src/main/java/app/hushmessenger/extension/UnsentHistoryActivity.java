@@ -6,11 +6,13 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.Build;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.DisplayCutout;
 import android.view.Gravity;
 import android.view.View;
+import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
@@ -67,27 +69,42 @@ public final class UnsentHistoryActivity extends Activity {
         getWindow().setNavigationBarColor(ui.background);
         getWindow().getDecorView().setSystemUiVisibility(light
             ? View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0);
+        if (Build.VERSION.SDK_INT >= 30) {
+            // targetSdk 36 enforces edge-to-edge. Request raw insets and apply them to our root.
+            getWindow().setDecorFitsSystemWindows(false);
+        }
 
         LinearLayout root = ui.column();
         root.setBackgroundColor(ui.background);
         root.setLayoutDirection(text.layoutDirection());
         root.setOnApplyWindowInsetsListener((view, insets) -> {
-            // Keep the entire screen below the status bar and clear of display cutouts.
-            // Preserve the page's own 16dp horizontal and 12/16dp vertical spacing.
-            DisplayCutout cutout = insets.getDisplayCutout();
-            int left = insets.getSystemWindowInsetLeft();
-            int top = insets.getSystemWindowInsetTop();
-            int right = insets.getSystemWindowInsetRight();
-            int bottom = insets.getSystemWindowInsetBottom();
-            if (cutout != null) {
-                left = Math.max(left, cutout.getSafeInsetLeft());
-                top = Math.max(top, cutout.getSafeInsetTop());
-                right = Math.max(right, cutout.getSafeInsetRight());
-                bottom = Math.max(bottom, cutout.getSafeInsetBottom());
+            // Use typed insets on Android 11+; legacy systemWindowInsetTop can be zero in
+            // edge-to-edge windows on Android 15/16 even while the status bar overlays content.
+            int left, top, right, bottom;
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets safe = insets.getInsets(
+                    WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                left = safe.left;
+                top = safe.top;
+                right = safe.right;
+                bottom = safe.bottom;
+            } else {
+                left = insets.getSystemWindowInsetLeft();
+                top = insets.getSystemWindowInsetTop();
+                right = insets.getSystemWindowInsetRight();
+                bottom = insets.getSystemWindowInsetBottom();
+                DisplayCutout cutout = insets.getDisplayCutout();
+                if (cutout != null) {
+                    left = Math.max(left, cutout.getSafeInsetLeft());
+                    top = Math.max(top, cutout.getSafeInsetTop());
+                    right = Math.max(right, cutout.getSafeInsetRight());
+                    bottom = Math.max(bottom, cutout.getSafeInsetBottom());
+                }
             }
             view.setPadding(ui.dp(16) + left, ui.dp(12) + top,
                 ui.dp(16) + right, ui.dp(16) + bottom);
-            return insets.consumeSystemWindowInsets().consumeDisplayCutout();
+            return Build.VERSION.SDK_INT >= 30 ? WindowInsets.CONSUMED
+                : insets.consumeSystemWindowInsets().consumeDisplayCutout();
         });
 
         buildHeader(root);
@@ -107,6 +124,9 @@ public final class UnsentHistoryActivity extends Activity {
         root.addView(scroll, scrollParams);
 
         setContentView(root);
+        // The listener is attached before the view enters the window; request a fresh dispatch
+        // after attachment so the status-bar inset is applied on API 35/36 as well.
+        root.requestApplyInsets();
     }
 
     private void buildHeader(LinearLayout root) {
