@@ -277,13 +277,15 @@ public final class UnsentHistoryActivity extends Activity {
 
     private void updateDiagnostics() {
         diagnostics.setText(
+            text.get("unsent_history_model_diagnostics",
+                Settings.unsentModelHookHits(), Settings.unsentModelIdMissing()) + "\n" +
             text.get("unsent_history_diagnostics",
                 Settings.unsentCaptureHits(), Settings.unsentCaptureSaved(),
                 Settings.unsentRevokeHits(), Settings.unsentRevokeSaved()) + "\n" +
             text.get("unsent_history_notification_diagnostics",
                 Settings.unsentNotificationHits(), Settings.unsentNotificationSaved()) + "\n" +
-            text.get("unsent_history_media_diagnostics",
-                Settings.unsentMediaHits(), Settings.unsentMediaSaved()));
+            text.get("unsent_history_callback_diagnostics",
+                Settings.unsentMediaCallbackHits(), Settings.unsentMediaHits(), Settings.unsentMediaSaved()));
     }
 
     private void renderList() {
