@@ -59,6 +59,26 @@ public class AntiUnsendStoreTest {
         assertEquals("normal", store.unsentText("normal"));
     }
 
+    @Test public void imageSignatureCheckRejectsMismatchedOrEncryptedData() throws Exception {
+        java.io.File image = java.io.File.createTempFile("hush-image-signature", ".png",
+            RuntimeEnvironment.getApplication().getCacheDir());
+        try {
+            byte[] pngHeader = new byte[] {
+                (byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+                0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+            };
+            java.nio.file.Files.write(image.toPath(), pngHeader);
+            assertTrue(Settings.hasImageFileSignature(image, "image/png"));
+            assertFalse(Settings.hasImageFileSignature(image, "image/jpeg"));
+
+            // An E2EE encrypted download must not be treated as a local, viewable image.
+            java.nio.file.Files.write(image.toPath(), new byte[32]);
+            assertFalse(Settings.hasImageFileSignature(image, "image/png"));
+        } finally {
+            image.delete();
+        }
+    }
+
     @Test public void imageMetadataLinksByDirectPathAndMediaKeyTimestamp() {
         store.captureMediaMetadata("/cdn/image/abc", 900, "image/jpeg", 100);
         store.captureMessageMetadata("m1", "thread-1", "sender-1", 800, 110);
