@@ -539,24 +539,22 @@ public final class Settings {
     }
 
     /**
-     * Messenger 581 download callback: p0 is SUm (metadata in field A07); p1 is RQz
-     * (successful result Uri in A00). Reflection keeps this extension independent of
-     * obfuscated classes and avoids modifying live bytecode registers.
+     * Messenger 581 download callback: p0 is SUm (metadata in field A07), and v19 is
+     * the completed local File returned by A0F(directPath). Do not use the callback Uri:
+     * its path component is not guaranteed to be a readable filesystem path.
      */
-    public static void captureDownloadedImageFromCallback(Object downloader, Object result) {
-        if (!wouldUse("keep_unsent") || downloader == null || result == null) return;
+    public static void captureDownloadedImageFromCallback(Object downloader, File localFile) {
+        if (!wouldUse("keep_unsent") || downloader == null || localFile == null) return;
         try {
             Object metadata = readDeclaredField(downloader, "A07");
-            Object uriValue = readDeclaredField(result, "A00");
-            if (metadata == null || !(uriValue instanceof android.net.Uri)) return;
-            String sourcePath = ((android.net.Uri) uriValue).getPath();
+            if (metadata == null || !localFile.isFile() || !localFile.canRead()) return;
             Object directPath = readDeclaredField(metadata, "A07");
             Object mime = readDeclaredField(metadata, "A06");
             Object timestamp = readDeclaredField(metadata, "A03");
             if (!(directPath instanceof String) || !(mime instanceof String) ||
                     !(timestamp instanceof Number)) return;
             captureDownloadedImage((String) directPath, (String) mime,
-                ((Number) timestamp).longValue(), sourcePath);
+                ((Number) timestamp).longValue(), localFile.getAbsolutePath());
         } catch (Exception error) {
             hookFailedPrivately("keep_unsent", "Can't inspect completed image download", error);
         }
