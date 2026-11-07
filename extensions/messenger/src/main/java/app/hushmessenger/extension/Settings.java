@@ -589,6 +589,7 @@ public final class Settings {
             long sourceLength = source.length();
             if (!source.isFile() || !source.canRead() || sourceLength <= 0 ||
                     sourceLength > MAX_UNSENT_IMAGE_BYTES) return;
+            if (!hasImageFileSignature(source, mimeType)) return;
 
             String key = AntiUnsendStore.mediaKey(directPath, mediaKeyTimestamp);
             if (key == null) return;
@@ -652,6 +653,53 @@ public final class Settings {
             if (temporary != null) temporary.delete();
             hookFailedPrivately("keep_unsent", "Can't save downloaded image for local history", error);
         }
+    }
+
+    /** Basic file-signature guard, not a substitute for Messenger's MIME/security checks. */
+    static boolean hasImageFileSignature(File file, String mimeType) throws java.io.IOException {
+        if (file == null || !file.isFile() || mimeType == null) return false;
+        byte[] signature = new byte[16];
+        int bytes = 0;
+        try (FileInputStream stream = new FileInputStream(file)) {
+            while (bytes < signature.length) {
+                int got = stream.read(signature, bytes, signature.length - bytes);
+                if (got < 0) break;
+                bytes += got;
+            }
+        }
+        if (bytes < 12) return false;
+        String mime = mimeType.toLowerCase(java.util.Locale.ROOT);
+        if (mime.equals("image/jpeg") || mime.equals("image/jpg")) {
+            return (signature[0] & 0xff) == 0xff && (signature[1] & 0xff) == 0xd8 &&
+                (signature[2] & 0xff) == 0xff;
+        }
+        if (mime.equals("image/png")) {
+            return (signature[0] & 0xff) == 0x89 &&
+                signature[1] == 0x50 && signature[2] == 0x4e && signature[3] == 0x47 &&
+                signature[4] == 0x0d && signature[5] == 0x0a &&
+                signature[6] == 0x1a && signature[7] == 0x0a;
+        }
+        if (mime.equals("image/webp")) {
+            return signature[0] == 'R' && signature[1] == 'I' &&
+                signature[2] == 'F' && signature[3] == 'F' &&
+                signature[8] == 'W' && signature[9] == 'E' &&
+                signature[10] == 'B' && signature[11] == 'P';
+        }
+        if (mime.equals("image/gif")) {
+            return signature[0] == 'G' && signature[1] == 'I' && signature[2] == 'F' &&
+                signature[3] == '8' && (signature[4] == '7' || signature[4] == '9') &&
+                signature[5] == 'a';
+        }
+        if (mime.equals("image/heic") || mime.equals("image/heif") || mime.equals("image/avif")) {
+            if (signature[4] != 'f' || signature[5] != 't' ||
+                    signature[6] != 'y' || signature[7] != 'p') return false;
+            String brand = new String(signature, 8, 4, java.nio.charset.StandardCharsets.US_ASCII);
+            if (mime.equals("image/avif")) return brand.equals("avif") || brand.equals("avis");
+            return brand.equals("heic") || brand.equals("heix") ||
+                brand.equals("hevc") || brand.equals("hevx") ||
+                brand.equals("mif1") || brand.equals("msf1");
+        }
+        return false;
     }
 
     private static String imageExtension(String mimeType) {
