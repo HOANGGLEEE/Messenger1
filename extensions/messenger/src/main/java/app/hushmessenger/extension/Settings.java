@@ -845,6 +845,9 @@ public final class Settings {
 
     /** History-only mode never changes Messenger's own unsent state. */
     public static boolean suppressUnsent(boolean original, String messageId) {
+        // This is Messenger's own per-message unsent predicate. Observe true values to mark
+        // the local archive, but always return the original value so Messenger behaves normally.
+        if (original) recordUnsent(messageId);
         return original;
     }
 
