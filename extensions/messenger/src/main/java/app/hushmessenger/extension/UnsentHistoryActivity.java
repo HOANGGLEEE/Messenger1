@@ -8,6 +8,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.view.DisplayCutout;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -62,10 +63,32 @@ public final class UnsentHistoryActivity extends Activity {
         ui = new SettingsUi(this, light);
         setTitle(text.get("unsent_history_title"));
 
+        getWindow().setStatusBarColor(ui.background);
+        getWindow().setNavigationBarColor(ui.background);
+        getWindow().getDecorView().setSystemUiVisibility(light
+            ? View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0);
+
         LinearLayout root = ui.column();
         root.setBackgroundColor(ui.background);
-        root.setPadding(ui.dp(16), ui.dp(12), ui.dp(16), ui.dp(16));
         root.setLayoutDirection(text.layoutDirection());
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            // Keep the entire screen below the status bar and clear of display cutouts.
+            // Preserve the page's own 16dp horizontal and 12/16dp vertical spacing.
+            DisplayCutout cutout = insets.getDisplayCutout();
+            int left = insets.getSystemWindowInsetLeft();
+            int top = insets.getSystemWindowInsetTop();
+            int right = insets.getSystemWindowInsetRight();
+            int bottom = insets.getSystemWindowInsetBottom();
+            if (cutout != null) {
+                left = Math.max(left, cutout.getSafeInsetLeft());
+                top = Math.max(top, cutout.getSafeInsetTop());
+                right = Math.max(right, cutout.getSafeInsetRight());
+                bottom = Math.max(bottom, cutout.getSafeInsetBottom());
+            }
+            view.setPadding(ui.dp(16) + left, ui.dp(12) + top,
+                ui.dp(16) + right, ui.dp(16) + bottom);
+            return insets.consumeSystemWindowInsets().consumeDisplayCutout();
+        });
 
         buildHeader(root);
         buildSummary(root);
