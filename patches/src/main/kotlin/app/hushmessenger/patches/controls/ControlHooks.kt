@@ -52,6 +52,8 @@ internal const val DRAWER_FOLDER_SELECTED = "HomeDrawerFragmentBase.handleOnFold
 internal const val DRAWER_REFRESH = "HomeDrawerFragmentBase.refreshDrawerItems"
 internal const val AVATAR_TAB_EVENT = "Lcom/facebook/xapp/messaging/composer/avatar/composertab/event/ActivateAvatarSticker;"
 internal const val COMPOSER_FACTORY = "Lcom/facebook/messaging/msys/thread/composer/configuration/xapp/BaseXappComposerConfigurationFactory;"
+internal const val XAPP_RECORDING_CONTROLS = "Lcom/facebook/xapp/messaging/composer/audio/recordcontrols/fragments/XappRecordingControlsDialogFragment;"
+internal const val SEND_MUSIC_HOOK = "$XAPP_RECORDING_CONTROLS->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V"
 internal const val SEARCH_CLEAR_TAG = "messenger_search_clear_button_tag"
 internal const val MONTAGE_CARD = "Lcom/facebook/messaging/montage/model/MontageCard;"
 internal const val STORY_MARK_READ_TAG = "MontageMsysMarkReadHandler"
@@ -131,6 +133,7 @@ internal val expectedHooks = mapOf(
     "hide_read_receipts" to setOf("LX/AX0;->run()V"),
     "read_mailbox" to setOf("LX/9sm;->A01(Ljava/lang/Long;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;)V"),
     "keep_unsent" to setOf("LX/SH3;->A01(Landroid/content/Intent;Lcom/facebook/auth/usersession/FbUserSession;Ljava/lang/String;)V"),
+    "send_music" to setOf(SEND_MUSIC_HOOK),
     "anonymous_stories" to setOf("LX/HNV;->C1V(${MONTAGE_CARD}Z)V"),
     "save_stories" to setOf("LX/JgG;->onClick(Landroid/view/View;)V"),
     "growth_notes" to setOf("Lcom/facebook/presence/note/ui/nux/controller/NotesNuxController;->" +
@@ -243,6 +246,8 @@ internal fun findControls(classes: Iterable<ClassDef>, community: CommunityInbox
             ?.initialValue.let { (it as? StringEncodedValue)?.value }
         for (method in cls.methods) {
             fun add(key: String) { found.getValue(key).add(method) }
+            if (cls.type == XAPP_RECORDING_CONTROLS && method.name == "onViewCreated" &&
+                method.returnType == "V" && method.parameterTypes == listOf("Landroid/view/View;", "Landroid/os/Bundle;")) add("send_music")
             if ((cls.type == EPHEMERAL_VIEWER && (method.name in EPHEMERAL_DIALOGS || method.name == "onResume")) ||
                 (cls.type == QUICKSNAP_VIEWER && method.name == "onCreateView")) {
                 try {
@@ -975,6 +980,32 @@ internal fun MutableMethod.validateKeyboardTabsInline(): Pair<Int, Int> {
 internal fun MutableMethod.injectKeyboardTabsInline() {
     val (copy, tabs) = validateKeyboardTabsInline()
     addInstructions(copy, "invoke-static/range {v$tabs .. v$tabs}, $SETTINGS->removeAvatarTabs(Ljava/lang/Iterable;)V")
+}
+
+internal fun MutableMethod.validateSendMusic(): Int {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: send-music recording sheet has no code")
+    val superCalls = code.indices.filter { index ->
+        code[index].opcode == Opcode.INVOKE_SUPER &&
+            (code[index] as? ReferenceInstruction)?.reference?.toString() ==
+            "Lcom/facebook/mig/bottomsheet/MigBottomSheetDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V"
+    }
+    val call = code.getOrNull(superCalls.singleOrNull() ?: -1) as? FiveRegisterInstruction
+    if (definingClass != XAPP_RECORDING_CONTROLS || name != "onViewCreated" ||
+        returnType != "V" || parameterTypes != listOf("Landroid/view/View;", "Landroid/os/Bundle;") ||
+        AccessFlags.STATIC.isSet(accessFlags) || implementation!!.registerCount != 5 ||
+        code.size != 54 || superCalls != listOf(3) || call?.registerCount != 3 ||
+        call.registerC != 2 || call.registerD != 3 || call.registerE != 4) {
+        throw PatchException("Messenger controls: Messenger 581 audio recording sheet changed")
+    }
+    return superCalls.single() + 1
+}
+
+/** Adds the picker entry only after the native recording sheet has initialized its view. */
+internal fun MutableMethod.injectSendMusic() {
+    val insertion = validateSendMusic()
+    addInstructions(insertion,
+        "invoke-static/range {p1 .. p1}, $SETTINGS->addSendMusicButton(Landroid/view/View;)V")
 }
 
 internal fun MutableMethod.validateOutgoingTyping(): Int {
