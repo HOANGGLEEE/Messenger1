@@ -91,6 +91,7 @@ hook people_tab LX/JKx;->A01(LX/JKx;)V
 hook read_mailbox LX/8yk;->A01(Ljava/lang/Long;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;)V
 hook reels_badge LX/4VE;->A09(LX/4VE;)Z
 hook save_stories LX/N4X;->onClick(Landroid/view/View;)V
+hook send_music Lcom/facebook/xapp/messaging/composer/audio/recordcontrols/fragments/XappRecordingControlsDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V
 hook screenshot_viewers Lcom/facebook/messaging/media/ephemeralmedia/viewer/EphemeralMediaViewerFragment;->A1E(Landroid/os/Bundle;)Landroid/app/Dialog;
 hook screenshot_viewers Lcom/facebook/messaging/media/ephemeralmedia/viewer/EphemeralMediaViewerFragment;->onResume()V
 hook screenshot_viewers Lcom/facebook/messaging/quicksnap/consumption/viewer/MsgrQuicksnapViewerFragment;->onCreateView(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;
