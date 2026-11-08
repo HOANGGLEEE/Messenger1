@@ -34,6 +34,7 @@
         <provider android:name="app.hushmessenger.extension.SettingsProvider" android:authorities="${applicationId}.hush.settings" android:exported="false" />
         <activity android:name="app.hushmessenger.extension.SettingsActivity" android:icon="@android:drawable/ic_menu_preferences" android:exported="true" />
         <activity android:name="app.hushmessenger.extension.UnsentHistoryActivity" android:exported="false" />
+        <activity android:name="app.hushmessenger.extension.MusicShareActivity" android:exported="false" android:excludeFromRecents="true" android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <activity android:name="app.hushmessenger.extension.RestartActivity" android:exported="false" android:excludeFromRecents="true" android:noHistory="true" android:configChanges="orientation|screenSize|keyboardHidden" />
     </application>
 </manifest>
