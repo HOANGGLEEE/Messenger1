@@ -474,6 +474,7 @@ internal val PROFILE_346213494 = ControlProfile(
         "hide_read_receipts" to setOf("LX/ArD;->run()V"),
         "inbox_promotions" to setOf("LX/23U;->A0J()Z", "LX/23U;->A0K()Z"),
         "keep_unsent" to setOf("LX/Ouv;->A01(Landroid/content/Intent;Lcom/facebook/auth/usersession/FbUserSession;Ljava/lang/String;)V"),
+        "send_music" to setOf("Lcom/facebook/xapp/messaging/composer/audio/recordcontrols/fragments/XappRecordingControlsDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V"),
         "menu_settings" to setOf(
             "LX/8xS;->A1h()V", "LX/H6W;->AxP(LX/0MS;)Ljava/util/ArrayList;", "LX/HBV;->onClick(Landroid/view/View;)V",
             "LX/TZ0;->CBl(LX/4nf;I)V", "LX/TZ6;->A0I(Ljava/util/List;)V",
