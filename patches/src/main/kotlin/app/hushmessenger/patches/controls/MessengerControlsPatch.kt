@@ -4,6 +4,7 @@ import app.hushmessenger.patches.MessengerTarget
 import app.hushmessenger.patches.coexist.validateVersionCode
 import app.morphe.patcher.patch.BytecodePatch
 import app.morphe.patcher.patch.PatchException
+import app.morphe.patcher.patch.Compatibility
 import app.morphe.patcher.patch.bytecodePatch
 import app.morphe.patcher.patch.resourcePatch
 import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod
@@ -133,6 +134,7 @@ internal fun injectControl(key: String, methods: Map<String, List<MutableMethod>
             "people_search" -> method.validatePeopleSearch()
             "people_story" -> method.validatePeopleStory()
             "keep_unsent" -> method.validateKeepUnsent()
+            "send_music" -> method.validateSendMusic()
             "unsent_indicator" -> method.validateUnsentIndicator()
             "delta_unsent" -> method.validateDeltaUnsent()
             "emoji_typeface" -> method.validateScratch()
@@ -167,6 +169,7 @@ internal fun injectControl(key: String, methods: Map<String, List<MutableMethod>
             "allow_screenshot" -> method.injectSwitch("allowScreenshot", "0x0")
             "hide_read_receipts", "read_mailbox" -> method.injectSwitch("hideReadReceipts", "0x0")
             "keep_unsent" -> method.injectKeepUnsent()
+            "send_music" -> method.injectSendMusic()
             "unsent_indicator" -> method.injectUnsentIndicator()
             "delta_unsent" -> method.injectDeltaUnsent()
             "emoji_typeface" -> method.injectEmojiTypeface()
@@ -180,7 +183,13 @@ internal fun injectControl(key: String, methods: Map<String, List<MutableMethod>
     }
 }
 
-private fun controlPatch(key: String, title: String, summary: String, group: String, vararg hooks: String): BytecodePatch {
+private fun controlPatch(key: String, title: String, summary: String, group: String, vararg hooks: String): BytecodePatch =
+    controlPatch(key, title, summary, group, MessengerTarget.COMPATIBILITY, *hooks)
+
+private fun controlPatch(
+    key: String, title: String, summary: String, group: String,
+    compatibility: Compatibility, vararg hooks: String,
+): BytecodePatch {
     var applied = false
     var nativeRoutesApplied = false
     val featureResources = resourcePatch(description = "Record HushMessenger capability: $key") {
@@ -203,7 +212,7 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
         default = true,
     ) {
         category(group)
-        compatibleWith(MessengerTarget.COMPATIBILITY)
+        compatibleWith(compatibility)
         dependsOn(settingsExtension, featureResources)
         execute {
             val selected = hooks.toSet().ifEmpty { setOf(key) }
@@ -397,6 +406,20 @@ val originalPhotoPatch = controlPatch("original_photo", "Send photos at original
 val allowScreenshotPatch = controlPatch("allow_screenshot", "Allow screenshots", "Lets you screenshot protected chat media, including view-once media and Quicksnap, and stops screenshot notices. This doesn't add replay or saving.", "Privacy", "allow_screenshot", "screenshot_viewers")
 @Suppress("unused")
 val hideReadReceiptsPatch = controlPatch("hide_read_receipts", "Hide read receipts", "Stops sending read receipts. Opened encrypted chats can stay unread on this phone. Replying or switching this off may notify the sender. Group coverage isn't verified.", "Privacy", "hide_read_receipts", "read_mailbox")
+private val messenger581Compatibility = MessengerTarget.compatibility(
+    mapOf("581.0.0.49.91" to MessengerTarget.VERSIONS.getValue("581.0.0.49.91"))
+)
+
+@Suppress("unused")
+val sendMusicPatch = controlPatch(
+    "send_music",
+    "Send music from chat",
+    "Adds a music picker to the voice-message sheet. Selected audio is handed to Messenger's native audio share flow; the final bubble style depends on Messenger's audio attachment support.",
+    "Conversations",
+    messenger581Compatibility,
+    "send_music",
+)
+
 @Suppress("unused")
 val keepUnsentPatch = controlPatch("keep_unsent", "Unsent message history", "Caches message text and metadata from verified model/render routes, records Messenger's unsent-state predicate without changing its return value, and archives supported E2EE images after Messenger downloads them to a readable local file. It never starts downloads. Notification snapshots remain a separate fallback and are not proof of an unsend. Group coverage is not verified.", "Privacy", "keep_unsent", "unsent_indicator", "delta_unsent")
 private var anonymousStoriesApplied = false
