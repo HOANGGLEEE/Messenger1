@@ -5,6 +5,7 @@ import app.morphe.patcher.extensions.InstructionExtensions.replaceInstruction
 import app.morphe.patcher.util.proxy.mutableTypes.MutableClass
 import com.android.tools.smali.dexlib2.AccessFlags
 import com.android.tools.smali.dexlib2.iface.ClassDef
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -18,6 +19,8 @@ private val SECURE_WINDOW_BODY = """
 """.trimIndent()
 
 class ControlDiscoveryTest {
+    @AfterTest fun resetProfile() { activeProfile = BASE_PROFILE }
+
     private val originals = mapOf(
         "LX/2UL;" to "InboxSubtabsItemSupplierImplementation\$onSubscribe\$1",
         "LX/Ahp;" to "ConversationTypingContext\$sendActiveStateRunnable\$1",
