@@ -36,6 +36,9 @@ internal fun Document.addSettingsEntry() {
     application.child("activity", "name" to "app.hushmessenger.extension.UnsentHistoryActivity",
         "label" to "Unsent message history", "exported" to "false",
         "theme" to "@android:style/Theme.Material.NoActionBar")
+    application.child("activity", "name" to "app.hushmessenger.extension.MusicShareActivity",
+        "label" to "Send music", "exported" to "false", "excludeFromRecents" to "true",
+        "theme" to "@android:style/Theme.Translucent.NoTitleBar")
     // The app drawer entry is an alias, so settings can hide it while the shortcuts and Menu tab row keep working.
     val launcher = application.child("activity-alias", "name" to "app.hushmessenger.extension.SettingsLauncher",
         "targetActivity" to "app.hushmessenger.extension.SettingsActivity", "label" to "HushMessenger settings",
