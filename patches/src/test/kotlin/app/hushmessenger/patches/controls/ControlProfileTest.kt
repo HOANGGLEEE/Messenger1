@@ -21,7 +21,11 @@ class ControlProfileTest {
         for (profile in controlProfiles.values) {
             assertEquals(BASE_PROFILE.hooks.keys, profile.hooks.keys)
             for (key in BASE_PROFILE.hooks.keys) {
-                assertEquals(BASE_PROFILE.hooks.getValue(key).size, profile.hooks.getValue(key).size, key)
+                if (key == "send_music") {
+                    assertEquals(if (profile === PROFILE_346213510) 1 else 0, profile.hooks.getValue(key).size, key)
+                } else {
+                    assertEquals(BASE_PROFILE.hooks.getValue(key).size, profile.hooks.getValue(key).size, key)
+                }
             }
         }
         assertEquals(100, PROFILE_346013370.hooks.values.sumOf { it.size })
