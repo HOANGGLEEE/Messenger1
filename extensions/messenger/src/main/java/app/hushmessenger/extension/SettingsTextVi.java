@@ -247,6 +247,8 @@ final class SettingsTextVi {
         {"use_system_emoji.description", "Hiển thị emoji bằng phông chữ của điện thoại thay cho bộ emoji tích hợp của Messenger."},
         {"original_photo.title", "Gửi ảnh chất lượng gốc"},
         {"original_photo.description", "Khi bật HD, gửi dữ liệu ảnh JPEG gốc thay vì bản được Messenger mã hóa lại. Siêu dữ liệu như vị trí và thông tin máy ảnh vẫn bị loại bỏ như trên bản của Messenger, ngoại trừ thẻ dùng để xoay ảnh đúng chiều. Ảnh trên 20 MB và video vẫn bị Messenger nén."},
+        {"send_music.title", "Gửi nhạc từ đoạn chat"},
+        {"send_music.description", "Thêm nút chọn nhạc vào bảng tin nhắn thoại và chuyển tệp âm thanh đã chọn sang luồng chia sẻ gốc của Messenger. Messenger tự xử lý tải lên và gửi; kiểu bong bóng phía người nhận phụ thuộc vào khả năng hỗ trợ tệp âm thanh của Messenger."},
         {"external_browser.title", "Mở liên kết bằng trình duyệt ngoài"},
         {"external_browser.description", "Dùng trình duyệt mặc định cho liên kết HTTP và HTTPS. Các loại liên kết khác vẫn giữ cách hoạt động ban đầu."},
         {"bubbles.title", "Cho phép bong bóng chat"},
