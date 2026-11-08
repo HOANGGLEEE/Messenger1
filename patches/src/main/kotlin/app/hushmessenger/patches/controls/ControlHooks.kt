@@ -133,7 +133,7 @@ internal val expectedHooks = mapOf(
     "hide_read_receipts" to setOf("LX/AX0;->run()V"),
     "read_mailbox" to setOf("LX/9sm;->A01(Ljava/lang/Long;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;)V"),
     "keep_unsent" to setOf("LX/SH3;->A01(Landroid/content/Intent;Lcom/facebook/auth/usersession/FbUserSession;Ljava/lang/String;)V"),
-    "send_music" to setOf(SEND_MUSIC_HOOK),
+    "send_music" to emptySet(),
     "anonymous_stories" to setOf("LX/HNV;->C1V(${MONTAGE_CARD}Z)V"),
     "save_stories" to setOf("LX/JgG;->onClick(Landroid/view/View;)V"),
     "growth_notes" to setOf("Lcom/facebook/presence/note/ui/nux/controller/NotesNuxController;->" +
@@ -246,8 +246,9 @@ internal fun findControls(classes: Iterable<ClassDef>, community: CommunityInbox
             ?.initialValue.let { (it as? StringEncodedValue)?.value }
         for (method in cls.methods) {
             fun add(key: String) { found.getValue(key).add(method) }
-            if (cls.type == XAPP_RECORDING_CONTROLS && method.name == "onViewCreated" &&
-                method.returnType == "V" && method.parameterTypes == listOf("Landroid/view/View;", "Landroid/os/Bundle;")) add("send_music")
+            if (activeProfile.hooks["send_music"]?.isNotEmpty() == true && cls.type == XAPP_RECORDING_CONTROLS &&
+                method.name == "onViewCreated" && method.returnType == "V" &&
+                method.parameterTypes == listOf("Landroid/view/View;", "Landroid/os/Bundle;")) add("send_music")
             if ((cls.type == EPHEMERAL_VIEWER && (method.name in EPHEMERAL_DIALOGS || method.name == "onResume")) ||
                 (cls.type == QUICKSNAP_VIEWER && method.name == "onCreateView")) {
                 try {
