@@ -88,6 +88,50 @@ class ControlsTest {
         assertEquals(Opcode.INVOKE_STATIC_RANGE, code[0].opcode)
     }
 
+    private fun sendMusicFixture(): MutableMethod {
+        val method = MutableMethod(ImmutableMethod(
+            XAPP_RECORDING_CONTROLS,
+            "onViewCreated",
+            listOf(
+                ImmutableMethodParameter("Landroid/view/View;", null, null),
+                ImmutableMethodParameter("Landroid/os/Bundle;", null, null),
+            ),
+            "V",
+            AccessFlags.PUBLIC.value,
+            null,
+            null,
+            ImmutableMethodImplementation(5, emptyList(), null, null),
+        ))
+        val body = listOf("const/4 v0, 0x0", "const/4 v0, 0x0", "const/4 v0, 0x0") +
+            "invoke-super {p0, p1, p2}, Lcom/facebook/mig/bottomsheet/MigBottomSheetDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V" +
+            List(49) { "nop" } + "return-void"
+        method.addInstructionsWithLabels(0, body.joinToString("\n"))
+        return method
+    }
+
+    @Test fun sendMusicButtonHooksOnlyAfterTheNativeRecordingSheetIsInitialized() {
+        val method = sendMusicFixture()
+        assertEquals(4, method.validateSendMusic())
+        method.injectSendMusic()
+        val code = method.implementation!!.instructions
+        assertEquals(Opcode.INVOKE_STATIC_RANGE, code[4].opcode)
+        assertEquals(
+            "$SETTINGS->addSendMusicButton(Landroid/view/View;)V",
+            (code[4] as ReferenceInstruction).reference.toString(),
+        )
+        assertEquals(55, code.size)
+    }
+
+    @Test fun changedSendMusicSheetContractFailsBeforeEditing() {
+        val method = sendMusicFixture()
+        val original = method.implementation!!.instructions.toList()
+        method.replaceInstruction(3, "invoke-super {p0, p2, p1}, Lcom/facebook/mig/bottomsheet/MigBottomSheetDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V")
+        val changed = method.implementation!!.instructions.toList()
+        assertFailsWith<PatchException> { method.injectSendMusic() }
+        assertEquals(changed, method.implementation!!.instructions.toList())
+        assertEquals(54, original.size)
+    }
+
     @Test fun missingOrAmbiguousAnchorsRejectTheApk() {
         assertFailsWith<PatchException> { validateControls(emptyMap()) }
         assertFailsWith<PatchException> { validateControls(expectedHooks.keys.associateWith { listOf(method(), method()) }) }
