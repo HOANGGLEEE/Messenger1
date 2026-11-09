@@ -298,6 +298,13 @@ private fun controlPatch(
                 nativeParser.validateNativeMessageModelCapture()
                 nativeParser
             } else null
+            val messenger581Revoke = if (key == "keep_unsent" && packageMetadata.versionCode == "346213510") {
+                mutableClassDefBy("LX/SYG;").methods.singleOrNull { method ->
+                    method.name == "D0o" && method.returnType == "Ljava/util/List;" &&
+                        method.parameterTypes == listOf("[B")
+                }?.also { it.validateE2eeDeleteCapture(messenger581 = true) }
+                    ?: throw PatchException("Keep unsent: Messenger 581 E2EE revoke hook is missing")
+            } else null
             val messenger581ImageCapture = if (key == "keep_unsent" && packageMetadata.versionCode == "346213510") {
                 val callback = mutableClassDefBy("LX/SUm;").methods.singleOrNull { method ->
                     method.name == "onCompletion" && method.returnType == "V" &&
@@ -342,6 +349,7 @@ private fun controlPatch(
                 }
                 messenger581MessageCapture?.injectMessageModelCapture()
                 messenger581NativeMessageCapture?.injectNativeMessageModelCapture()
+                messenger581Revoke?.injectE2eeDeleteCapture(messenger581 = true)
                 messenger581ImageCapture?.injectDownloadedImageCapture()
                 if (key == "keep_unsent") {
                     notificationCaptureMethods.forEach { (className, methodId) ->
