@@ -257,6 +257,8 @@ public class AntiUnsendStoreTest {
             assertTrue(one.createNewFile());
             assertTrue(two.createNewFile());
             assertTrue(store.saveMediaFile("/cdn/image/one", 901, one.getAbsolutePath(), 104));
+            // Repeated completion callback for the same media identity must remain one row.
+            assertTrue(store.saveMediaFile("/cdn/image/one", 901, one.getAbsolutePath(), 106));
             assertTrue(store.saveMediaFile("/cdn/image/two", 902, two.getAbsolutePath(), 105));
             store.markUnsent("m9", 110);
             var images = store.listUnsentMedia("m9");
