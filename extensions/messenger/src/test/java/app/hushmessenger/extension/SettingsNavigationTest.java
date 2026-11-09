@@ -60,7 +60,7 @@ public class SettingsNavigationTest {
                 .setInsets(WindowInsets.Type.navigationBars(), Insets.of(0, 0, 0, 72))
                 .build();
             root.dispatchApplyWindowInsets(insets);
-            int baseTop = Math.round(12 * screen.get().getResources().getDisplayMetrics().density);
+            int baseTop = Math.round(UnsentHistoryActivity.HISTORY_TOP_GAP_DP * screen.get().getResources().getDisplayMetrics().density);
             assertEquals("History content must start below the Android status bar",
                 baseTop + 64, root.getPaddingTop());
         }
