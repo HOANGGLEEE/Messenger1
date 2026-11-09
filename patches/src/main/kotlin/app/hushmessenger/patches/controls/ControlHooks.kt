@@ -1440,8 +1440,10 @@ internal fun MutableMethod.validateDownloadedImageCapture(): Int {
  * metadata directPath only as the stable media-archive key.
  */
 internal fun MutableMethod.injectDownloadedImageCapture() {
-    val fileResult = validateDownloadedImageCapture()
-    addInstructions(fileResult + 1,
+    validateDownloadedImageCapture()
+    // The completion result already carries the file URI. Snapshot it before stock
+    // callback branches can return or release the temporary file.
+    addInstructions(0,
         "invoke-static/range {p0 .. p1}, $SETTINGS->captureDownloadedImageFromCallback(Ljava/lang/Object;Ljava/lang/Object;)V")
 }
 
