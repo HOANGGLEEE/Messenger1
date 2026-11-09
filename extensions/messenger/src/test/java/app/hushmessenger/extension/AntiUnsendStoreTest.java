@@ -281,4 +281,28 @@ public class AntiUnsendStoreTest {
         assertTrue(store.listUnsentMedia("m10").isEmpty());
     }
 
+
+    @Test public void textAndPrivateImageSurviveDatabaseReopen() throws Exception {
+        store.captureText("m11", "thread-11", "sender-11", "persisted text", 1100, 100);
+        store.captureMediaMetadataForMessage("/cdn/image/persist", "m11", "thread-11",
+            1110, "image/jpeg", 101);
+        java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(), "m11-persisted.jpg");
+        try {
+            assertTrue(image.createNewFile());
+            assertTrue(store.saveMediaFile("/cdn/image/persist", 1110, image.getAbsolutePath(), 102));
+            store.markUnsent("m11", 103);
+
+            // Closing and reopening SQLite simulates a fresh process reading the same private archive.
+            store.close();
+            store = AntiUnsendStore.get(RuntimeEnvironment.getApplication());
+            assertEquals("persisted text", store.unsentText("m11"));
+            var images = store.listUnsentMedia("m11");
+            assertEquals(1, images.size());
+            assertEquals(image.getAbsolutePath(), images.get(0).localPath);
+            assertTrue(new java.io.File(images.get(0).localPath).exists());
+        } finally {
+            image.delete();
+        }
+    }
+
 }
