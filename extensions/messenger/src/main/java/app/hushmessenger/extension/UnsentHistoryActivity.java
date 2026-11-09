@@ -37,6 +37,13 @@ public final class UnsentHistoryActivity extends Activity {
     private static final int IMAGES = 2;
     private static final int NOTIFICATIONS = 3;
 
+    /** Breathing room between the status-bar safe area and the history header. */
+    static final int HISTORY_TOP_GAP_DP = 24;
+
+    static int historyContentTopPadding(int safeInsetTop, float density) {
+        return Math.max(0, safeInsetTop) + Math.round(HISTORY_TOP_GAP_DP * Math.max(0f, density));
+    }
+
     private SettingsText text;
     private SettingsUi ui;
     private LinearLayout list;
@@ -101,7 +108,7 @@ public final class UnsentHistoryActivity extends Activity {
                     bottom = Math.max(bottom, cutout.getSafeInsetBottom());
                 }
             }
-            view.setPadding(ui.dp(16) + left, ui.dp(12) + top,
+            view.setPadding(ui.dp(16) + left, historyContentTopPadding(top, getResources().getDisplayMetrics().density),
                 ui.dp(16) + right, ui.dp(16) + bottom);
             return Build.VERSION.SDK_INT >= 30 ? WindowInsets.CONSUMED
                 : insets.consumeSystemWindowInsets().consumeDisplayCutout();
