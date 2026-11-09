@@ -1226,7 +1226,7 @@ internal fun MutableMethod.injectE2eeIncomingCapture() {
  * is_unsent + unsent_timestamp_ms. Pin that exact sequence instead of treating every generic
  * DeleteMessageClientDelta as an unsend.
  */
-internal fun MutableMethod.validateE2eeDeleteCapture(): Pair<Int, Int> {
+internal fun MutableMethod.validateE2eeDeleteCapture(messenger581: Boolean = false): Pair<Int, Int> {
     val code = implementation?.instructions?.toList()
         ?: throw PatchException("Messenger controls: E2EE revoke hook has no code")
     val strings = code.mapNotNull { ((it as? ReferenceInstruction)?.reference as? StringReference)?.string }.toSet()
@@ -1252,7 +1252,9 @@ internal fun MutableMethod.validateE2eeDeleteCapture(): Pair<Int, Int> {
     }
     val match = matches.singleOrNull()
         ?: throw PatchException("Messenger controls: verified E2EE RevokeMessage route changed")
-    if (definingClass != "LX/VtI;" || name != "Czd" || returnType != "Ljava/util/List;" ||
+    val expectedOwner = if (messenger581) "LX/SYG;" else "LX/VtI;"
+    val expectedName = if (messenger581) "D0o" else "Czd"
+    if (definingClass != expectedOwner || name != expectedName || returnType != "Ljava/util/List;" ||
         parameterTypes != listOf("[B") || AccessFlags.STATIC.isSet(accessFlags) ||
         "is_unsent" !in strings || "unsent_timestamp_ms" !in strings) {
         throw PatchException("Messenger controls: verified E2EE revoke hook changed")
@@ -1260,8 +1262,8 @@ internal fun MutableMethod.validateE2eeDeleteCapture(): Pair<Int, Int> {
     return match
 }
 
-internal fun MutableMethod.injectE2eeDeleteCapture() {
-    val (index, messageId) = validateE2eeDeleteCapture()
+internal fun MutableMethod.injectE2eeDeleteCapture(messenger581: Boolean = false) {
+    val (index, messageId) = validateE2eeDeleteCapture(messenger581)
     addInstructions(index + 1,
         "invoke-static {v$messageId}, $SETTINGS->recordUnsent(Ljava/lang/String;)V")
 }
