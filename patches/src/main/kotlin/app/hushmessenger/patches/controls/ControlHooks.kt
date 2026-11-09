@@ -1006,7 +1006,7 @@ internal fun MutableMethod.validateSendMusic(): Int {
 internal fun MutableMethod.injectSendMusic() {
     val insertion = validateSendMusic()
     addInstructions(insertion,
-        "invoke-static/range {p1 .. p1}, $SETTINGS->addSendMusicButton(Landroid/view/View;)V")
+        "invoke-static/range {p0 .. p0}, Lapp/hushmessenger/extension/AudioPickerBridge;->install(Ljava/lang/Object;)V")
 }
 
 internal fun MutableMethod.validateOutgoingTyping(): Int {
