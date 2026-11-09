@@ -12,22 +12,25 @@ import android.view.Window;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
-import java.lang.reflect.Method;
-
-/** Adds a small entry point to Messenger's native voice-message recording sheet. */
+/** Adds the picker entry to the exact Messenger 581 Xapp voice-message dialog. */
 public final class AudioPickerBridge {
     private static final String TAG = "hush_music_picker_button";
+    private static final String XAPP_FRAGMENT =
+            "com.facebook.xapp.messaging.composer.audio.recordcontrols.fragments.XappRecordingControlsDialogFragment";
 
     private AudioPickerBridge() { }
 
-    public static void install(Object fragment, Object voiceMessageSender) {
-        if (fragment == null || voiceMessageSender == null) return;
+    public static void install(Object fragment) {
+        if (fragment == null || !Settings.enabled("send_music")) return;
         try {
-            Method getActivity = fragment.getClass().getMethod("getActivity");
-            Activity activity = (Activity) getActivity.invoke(fragment);
-            Method getDialog = fragment.getClass().getMethod("getDialog");
-            Dialog dialog = (Dialog) getDialog.invoke(fragment);
-            if (activity == null || dialog == null) return;
+            Class<?> expected = Class.forName(XAPP_FRAGMENT, false, fragment.getClass().getClassLoader());
+            if (!expected.isInstance(fragment)) {
+                throw new IllegalStateException("Unexpected Messenger recording fragment: " + fragment.getClass().getName());
+            }
+
+            Activity activity = (Activity) fragment.getClass().getMethod("getActivity").invoke(fragment);
+            Dialog dialog = (Dialog) fragment.getClass().getMethod("getDialog").invoke(fragment);
+            if (activity == null || activity.isFinishing() || dialog == null) return;
             Window window = dialog.getWindow();
             if (window == null) return;
 
@@ -60,7 +63,7 @@ public final class AudioPickerBridge {
             background.setCornerRadius(dp(activity, 24));
             button.setBackground(background);
             button.setElevation(dp(activity, 7));
-            button.setOnClickListener(view -> AudioPickerActivity.launch(activity, voiceMessageSender));
+            button.setOnClickListener(view -> AudioPickerActivity.launch(activity, fragment));
 
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, dp(activity, 44),
@@ -69,8 +72,7 @@ public final class AudioPickerBridge {
             params.rightMargin = dp(activity, 16);
             overlay.addView(button, params);
         } catch (Throwable error) {
-            // A missing host view must not affect Messenger's original recording controls.
-            android.util.Log.w("HushMessengerAudio", "Couldn't add the music picker", error);
+            Settings.hookFailedPrivately("send_music", "Can't add the native voice-message picker", error);
         }
     }
 
