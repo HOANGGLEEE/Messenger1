@@ -1272,6 +1272,22 @@ internal fun MutableMethod.injectE2eeDeleteCapture(messenger581: Boolean = false
  * Messenger 581 converts the message-model fragment into QPL after the encrypted payload has
  * been materialized. This model carries stable message/thread IDs, unsent state and image metadata.
  */
+internal fun MutableMethod.injectMessenger581MaterializedMessageCapture() {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Keep unsent: Messenger 581 message materializer has no code")
+    val readsMessageId = code.any {
+        (it as? ReferenceInstruction)?.reference?.toString() == "LX/QPL;->A0I()Ljava/lang/String;"
+    }
+    if (definingClass != "LX/SDX;" || name != "A0T" || returnType != "LX/Qdg;" ||
+        AccessFlags.STATIC.isSet(accessFlags) ||
+        parameterTypes != listOf("LX/QPL;", "Ljava/lang/String;", "Ljava/util/Set;", "Z") ||
+        !readsMessageId) {
+        throw PatchException("Keep unsent: Messenger 581 message materializer changed")
+    }
+    addInstructions(0,
+        "invoke-static/range {p1 .. p1}, $SETTINGS->captureIncomingQpl(Ljava/lang/Object;)V")
+}
+
 internal fun MutableMethod.validateMessageModelCapture(): Int {
     val code = implementation?.instructions?.toList()
         ?: throw PatchException("Messenger controls: message-model capture hook has no code")
