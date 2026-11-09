@@ -425,7 +425,7 @@ val allowScreenshotPatch = controlPatch("allow_screenshot", "Allow screenshots",
 @Suppress("unused")
 val hideReadReceiptsPatch = controlPatch("hide_read_receipts", "Hide read receipts", "Stops sending read receipts. Opened encrypted chats can stay unread on this phone. Replying or switching this off may notify the sender. Group coverage isn't verified.", "Privacy", "hide_read_receipts", "read_mailbox")
 private val messenger581Compatibility = MessengerTarget.compatibility(
-    mapOf("581.0.0.49.91" to MessengerTarget.VERSIONS.getValue("581.0.0.49.91"))
+    mapOf("581.0.0.49.91" to listOf(346213510))
 )
 
 @Suppress("unused")
