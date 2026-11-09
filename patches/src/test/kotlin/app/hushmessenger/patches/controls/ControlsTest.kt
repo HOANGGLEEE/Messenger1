@@ -116,7 +116,7 @@ class ControlsTest {
         val code = method.implementation!!.instructions
         assertEquals(Opcode.INVOKE_STATIC_RANGE, code[4].opcode)
         assertEquals(
-            "$SETTINGS->addSendMusicButton(Landroid/view/View;)V",
+            "Lapp/hushmessenger/extension/AudioPickerBridge;->install(Ljava/lang/Object;)V",
             (code[4] as ReferenceInstruction).reference.toString(),
         )
         assertEquals(55, code.size)
