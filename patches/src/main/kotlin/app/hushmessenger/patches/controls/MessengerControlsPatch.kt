@@ -432,7 +432,7 @@ private val messenger581Compatibility = MessengerTarget.compatibility(
 val sendMusicPatch = controlPatch(
     "send_music",
     "Send music from chat",
-    "Adds a music picker to the voice-message sheet. Selected audio is handed to Messenger's native audio share flow; the final bubble style depends on Messenger's audio attachment support.",
+    "Adds a music picker to Messenger's Xapp voice-message sheet. Selected audio is converted to Messenger's native MediaResource and waveform model, then passed to its native voice-message sender.",
     "Conversations",
     messenger581Compatibility,
     "send_music",
