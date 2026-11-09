@@ -198,7 +198,7 @@ class CatalogToolTest {
         val patch = root.resolve("patches/src/main/kotlin/app/hushmessenger/patches/controls/MessengerControlsPatch.kt").readText()
         val ui = root.resolve("extensions/messenger/src/main/java/app/hushmessenger/extension/SettingsActivity.java").readText()
         val manifest = root.resolve("extensions/messenger/src/main/AndroidManifest.xml").readText()
-        val names = Regex("""controlPatch\("[a-z_]+",\s*"([^"]+)"""").findAll(patch)
+        val names = Regex("""controlPatch\(\s*"[a-z_]+",\s*"([^"]+)"""").findAll(patch)
             .map { it.groupValues[1] }.toSet() + "Install beside Meta apps" + "Open settings from menu" + "Restore screens on re-signed builds" + "Material You theme" + "View stories anonymously" + "Save any story" + "Slide chats in and out"
         CatalogTool.validateDefinitions(patch, ui, manifest, names)
         assertFailsWith<IllegalArgumentException> { CatalogTool.validateDefinitions(patch.replace("controlPatch(\"people\"", "controlPatch(\"changed\""), ui, manifest, names) }
