@@ -349,6 +349,13 @@ private fun controlPatch(
                 }
                 messenger581MessageCapture?.injectMessageModelCapture()
                 messenger581NativeMessageCapture?.injectNativeMessageModelCapture()
+                if (messenger581MessageCapture != null) {
+                    val materializer = mutableClassDefBy("LX/SDX;").methods.singleOrNull { method ->
+                        method.name == "A0T" && method.returnType == "LX/Qdg;" &&
+                            method.parameterTypes == listOf("LX/QPL;", "Ljava/lang/String;", "Ljava/util/Set;", "Z")
+                    } ?: throw PatchException("Keep unsent: Messenger 581 message materializer is missing")
+                    materializer.injectMessenger581MaterializedMessageCapture()
+                }
                 messenger581Revoke?.injectE2eeDeleteCapture(messenger581 = true)
                 messenger581ImageCapture?.injectDownloadedImageCapture()
                 if (key == "keep_unsent") {
