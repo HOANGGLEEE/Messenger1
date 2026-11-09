@@ -124,12 +124,11 @@ class ControlsTest {
 
     @Test fun changedSendMusicSheetContractFailsBeforeEditing() {
         val method = sendMusicFixture()
-        val original = method.implementation!!.instructions.toList()
-        method.replaceInstruction(3, "invoke-super {p0, p2, p1}, Lcom/facebook/mig/bottomsheet/MigBottomSheetDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V")
+        method.addInstructionsWithLabels(0, "nop")
         val changed = method.implementation!!.instructions.toList()
         assertFailsWith<PatchException> { method.injectSendMusic() }
         assertEquals(changed, method.implementation!!.instructions.toList())
-        assertEquals(54, original.size)
+        assertEquals(55, changed.size)
     }
 
     @Test fun missingOrAmbiguousAnchorsRejectTheApk() {
