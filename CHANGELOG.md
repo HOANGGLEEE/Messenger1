@@ -1,5 +1,13 @@
 # Changelog
 
+## Development — Messenger 581.0.0.49.91 (build 346213510)
+
+- Added the 581 native parser, QPL materializer and E2EE delete-delta hooks for the local unsent archive. E2EE images are copied only from Messenger's completed, readable local download callback and are linked by direct path plus media-key timestamp to the exact message and thread.
+- Made duplicate and out-of-order revoke callbacks idempotent, preserving the earliest revoke timestamp. Added tests for multiple images, repeated metadata/download callbacks, missing downloads and persistence after reopening the private SQLite archive.
+- Increased the history header gap below the system status-bar inset to 24dp and added inset regression tests.
+- Reworked Send music to create Messenger's native MediaResource and WaveformData, install them in the Xapp voice composer state holder and invoke its native send method. This patch is restricted to build 346213510. End-to-end playback with two Messenger accounts has not yet been verified on a device.
+- The previous v0.21.0 MPP predates these changes; use the newly built development artifact, not the public release bundle.
+
 ## 0.21.0 (2026-10-06)
 
 - **Unsent message history** is now a local archive instead of an unsend blocker. HushMessenger saves plaintext already available on the device, marks an exact local record when Messenger reports a revoke, and always lets Messenger continue its normal unsend behavior.
