@@ -1,15 +1,17 @@
-name: Verify Messenger 581 image archive
+name: Verify Messenger 581 archive and native audio
 
 on:
   push:
     branches:
       - feature/unsent-images-messenger-581
+      - fix/messenger581-e2ee-revoke
   pull_request:
     branches:
       - main
     paths:
       - "extensions/messenger/**"
-      - "patches/src/main/kotlin/app/hushmessenger/patches/controls/**"
+      - "patches/src/main/kotlin/**"
+      - "patches/src/test/kotlin/**"
       - ".github/workflows/verify-messenger-581.yml"
   workflow_dispatch:
 
@@ -53,7 +55,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: messenger-581-image-archive-patch-bundle
+          name: messenger-581-hushmessenger-patch-bundle
           path: |
             patches/build/libs/*.mpp
             gradle/verification-metadata.xml
