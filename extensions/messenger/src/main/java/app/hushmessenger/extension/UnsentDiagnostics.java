@@ -12,25 +12,28 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Privacy-preserving diagnostics for Keep unsent messages.
+ * Privacy-preserving, process-local diagnostics for Keep unsent messages.
  *
  * The event ring accepts only fixed stage/result tokens. It never stores message text,
  * message/thread/account IDs, attachment URLs, notification contents or media bytes.
+ * Counters are in memory to avoid repeated disk writes from message-render hooks.
  */
 public final class UnsentDiagnostics {
     private static final String TAG = "HushMessengerUnsend";
-    private static final String PREFS_NAME = "hushmessenger";
-    private static final String COUNT_PREFIX = "unsent_diag_count_";
-    private static final String EVENTS_KEY = "unsent_diag_events";
     private static final int MAX_EVENTS = 80;
     private static final Object LOCK = new Object();
+    private static final ConcurrentHashMap<String, AtomicLong> COUNTERS = new ConcurrentHashMap<>();
+    private static final ArrayDeque<Event> EVENTS = new ArrayDeque<>();
 
     private static final Set<String> STAGES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
         "runtime.initialize", "feature.keep_unsent", "hook.intent", "hook.delta_unsent",
@@ -46,6 +49,17 @@ public final class UnsentDiagnostics {
         "not_saved", "started", "failed", "other"
     )));
 
+    private static final class Event {
+        final long at;
+        final String stage;
+        final String result;
+        Event(long at, String stage, String result) {
+            this.at = at;
+            this.stage = stage;
+            this.result = result;
+        }
+    }
+
     private UnsentDiagnostics() {}
 
     private static Context appContext(Context context) {
@@ -55,35 +69,22 @@ public final class UnsentDiagnostics {
     }
 
     /** Records only allow-listed stage and result tokens; arbitrary payloads are discarded. */
-    public static void record(Context context, String stage, String result) {
-        Context app = appContext(context);
-        if (app == null) return;
-
+    public static void record(Context ignored, String stage, String result) {
         String safeStage = STAGES.contains(stage) ? stage : "other";
         String safeResult = RESULTS.contains(result) ? result : "other";
         long now = System.currentTimeMillis();
-        SharedPreferences prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
 
+        COUNTERS.computeIfAbsent(safeStage, key -> new AtomicLong()).incrementAndGet();
         synchronized (LOCK) {
-            String old = prefs.getString(EVENTS_KEY, "");
-            String[] previous = old.isEmpty() ? new String[0] : old.split("\n");
-            StringBuilder ring = new StringBuilder();
-            int first = Math.max(0, previous.length - (MAX_EVENTS - 1));
-            for (int i = first; i < previous.length; i++) {
-                if (previous[i].isEmpty()) continue;
-                if (ring.length() > 0) ring.append('\n');
-                ring.append(previous[i]);
-            }
-            if (ring.length() > 0) ring.append('\n');
-            ring.append(now).append('|').append(safeStage).append('|').append(safeResult);
-
-            String countKey = COUNT_PREFIX + safeStage;
-            prefs.edit()
-                .putLong(countKey, prefs.getLong(countKey, 0) + 1)
-                .putString(EVENTS_KEY, ring.toString())
-                .apply();
+            while (EVENTS.size() >= MAX_EVENTS) EVENTS.removeFirst();
+            EVENTS.addLast(new Event(now, safeStage, safeResult));
         }
-        Log.i(TAG, safeStage + "=" + safeResult);
+
+        // delta_unsent may be called for every rendered row. Keep false observations in the
+        // report counters, but avoid flooding logcat; true observations remain visible.
+        if (!"hook.delta_unsent".equals(safeStage) || "true".equals(safeResult)) {
+            Log.i(TAG, safeStage + "=" + safeResult);
+        }
     }
 
     /** Human-readable, compact summary shown on the Unsent History page. */
@@ -91,7 +92,9 @@ public final class UnsentDiagnostics {
         Context app = appContext(context);
         if (app == null) return "Debug: runtime chưa khởi tạo";
 
-        SharedPreferences prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = Settings.preferences != null
+            ? Settings.preferences
+            : app.getSharedPreferences("hushmessenger", Context.MODE_PRIVATE);
         Bundle metadata = metadata(app);
         boolean installed = Settings.installed != null && Settings.installed.contains("keep_unsent");
         boolean enabled = installed && prefs.getBoolean("keep_unsent", false)
@@ -121,11 +124,14 @@ public final class UnsentDiagnostics {
         if (app == null) return "{\"error\":\"runtime_not_initialized\"}";
 
         try {
-            SharedPreferences prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            SharedPreferences prefs = Settings.preferences != null
+                ? Settings.preferences
+                : app.getSharedPreferences("hushmessenger", Context.MODE_PRIVATE);
             Bundle metadata = metadata(app);
             JSONObject root = new JSONObject();
             root.put("schema", "hush-unsent-debug-v1");
             root.put("exportedAtEpochMs", System.currentTimeMillis());
+            root.put("sessionOnly", true);
             root.put("privacy", "No message text, message IDs, account IDs, attachment URLs or media bytes are included.");
 
             JSONObject device = new JSONObject();
@@ -167,25 +173,18 @@ public final class UnsentDiagnostics {
             root.put("runtime", runtime);
 
             JSONObject counters = new JSONObject();
-            for (Map.Entry<String, ?> entry : prefs.getAll().entrySet()) {
-                String key = entry.getKey();
-                if (!key.startsWith(COUNT_PREFIX)) continue;
-                Object value = entry.getValue();
-                if (value instanceof Number) counters.put(key.substring(COUNT_PREFIX.length()), value);
+            for (Map.Entry<String, AtomicLong> entry : COUNTERS.entrySet()) {
+                counters.put(entry.getKey(), entry.getValue().get());
             }
             root.put("counters", counters);
 
             JSONArray events = new JSONArray();
-            String rawEvents = prefs.getString(EVENTS_KEY, "");
-            if (!rawEvents.isEmpty()) {
-                for (String line : rawEvents.split("\n")) {
-                    String[] parts = line.split("\\|", 3);
-                    if (parts.length != 3) continue;
+            synchronized (LOCK) {
+                for (Event item : EVENTS) {
                     JSONObject event = new JSONObject();
-                    try { event.put("atEpochMs", Long.parseLong(parts[0])); }
-                    catch (NumberFormatException ignored) { continue; }
-                    event.put("stage", parts[1]);
-                    event.put("result", parts[2]);
+                    event.put("atEpochMs", item.at);
+                    event.put("stage", item.stage);
+                    event.put("result", item.result);
                     events.put(event);
                 }
             }
@@ -222,14 +221,10 @@ public final class UnsentDiagnostics {
         return out.toString();
     }
 
-    static void clearForTests(Context context) {
-        Context app = appContext(context);
-        if (app == null) return;
-        SharedPreferences prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        SharedPreferences.Editor edit = prefs.edit();
-        for (String key : prefs.getAll().keySet()) {
-            if (key.startsWith(COUNT_PREFIX) || EVENTS_KEY.equals(key)) edit.remove(key);
+    static void clearForTests(Context ignored) {
+        COUNTERS.clear();
+        synchronized (LOCK) {
+            EVENTS.clear();
         }
-        edit.commit();
     }
 }
