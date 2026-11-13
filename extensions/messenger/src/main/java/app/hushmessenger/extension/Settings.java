@@ -480,6 +480,7 @@ public final class Settings {
         Context context = appContext;
         if (context == null) {
             UnsentDiagnostics.record(appContext, "revoke.save", "no_context");
+            activeAt.put("keep_unsent", System.currentTimeMillis());
             return;
         }
         try {
