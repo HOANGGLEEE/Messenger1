@@ -110,7 +110,7 @@ public class SettingsTest {
         assertTrue(Settings.suppressUnsent(true, "diagnostic-only-id"));
         assertFalse(Settings.suppressUnsent(false, "diagnostic-only-id"));
         String report = UnsentDiagnostics.report(RuntimeEnvironment.getApplication());
-        assertTrue(report.contains("\\"hook.delta_unsent\\": 2"));
+        assertTrue(report.contains("\"hook.delta_unsent\": 2"));
         assertFalse(report.contains("diagnostic-only-id"));
     }
 
