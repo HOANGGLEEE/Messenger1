@@ -167,12 +167,28 @@ public final class UnsentDiagnostics {
     }
 
     private static int metadataInt(Bundle metadata, String key) {
-        return metadata == null ? -1 : metadata.getInt(key, -1);
+        if (metadata == null || !metadata.containsKey(key)) return -1;
+        Object value = metadata.get(key);
+        if (value instanceof Number) return ((Number) value).intValue();
+        if (value instanceof String) {
+            try { return Integer.parseInt((String) value); }
+            catch (NumberFormatException ignored) { return -1; }
+        }
+        return -1;
+    }
+
+    private static boolean metadataBoolean(Bundle metadata, String key) {
+        if (metadata == null || !metadata.containsKey(key)) return false;
+        Object value = metadata.get(key);
+        if (value instanceof Boolean) return (Boolean) value;
+        if (value instanceof String) return Boolean.parseBoolean((String) value);
+        if (value instanceof Number) return ((Number) value).intValue() != 0;
+        return false;
     }
 
     private static String installedState(Bundle metadata, String key) {
         return metadata == null || !metadata.containsKey(key) ? "không xác định" :
-            (metadata.getBoolean(key, false) ? "đã cài" : "chưa cài");
+            (metadataBoolean(metadata, key) ? "đã cài" : "chưa cài");
     }
 
     /** Compact hook-site and runtime summary shown in the History diagnostics panel. */
@@ -254,9 +270,9 @@ public final class UnsentDiagnostics {
             runtime.put("paused", prefs.getBoolean("paused", false));
             runtime.put("safeMode", CrashGuard.isSafeMode());
             runtime.put("keepUnsentEnabledNow", enabled);
-            runtime.put("e2eeCaptureHook", meta != null && meta.getBoolean("hush.unsent.e2ee_capture_hook", false));
-            runtime.put("deltaUnsentHook", meta != null && meta.getBoolean("hush.unsent.delta_hook", false));
-            runtime.put("textRenderHook", meta != null && meta.getBoolean("hush.unsent.text_render_hook", false));
+            runtime.put("e2eeCaptureHook", metadataBoolean(meta, "hush.unsent.e2ee_capture_hook"));
+            runtime.put("deltaUnsentHook", metadataBoolean(meta, "hush.unsent.delta_hook"));
+            runtime.put("textRenderHook", metadataBoolean(meta, "hush.unsent.text_render_hook"));
             runtime.put("messageParserHookSites", metadataInt(meta, "hush.unsent.message_parser_hook_sites"));
             runtime.put("nativeParserHookSites", metadataInt(meta, "hush.unsent.native_parser_hook_sites"));
             runtime.put("revokeHookSites", metadataInt(meta, "hush.unsent.revoke_hook_sites"));
