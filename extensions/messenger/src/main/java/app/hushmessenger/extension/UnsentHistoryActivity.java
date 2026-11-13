@@ -2,6 +2,8 @@ package app.hushmessenger.extension;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
@@ -9,6 +11,8 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.text.DateFormat;
 import java.util.Date;
 import java.util.List;
@@ -19,6 +23,8 @@ public final class UnsentHistoryActivity extends Activity {
     private SettingsUi ui;
     private LinearLayout list;
     private TextView diagnostics;
+    private String pendingDebugReport;
+    private static final int DEBUG_EXPORT_REQUEST = 7412;
 
     @Override public void onCreate(Bundle state) {
         HostScreens.start(this);
@@ -55,6 +61,11 @@ public final class UnsentHistoryActivity extends Activity {
         diagnostics.setTag("unsent_history_diagnostics");
         ui.add(root, diagnostics, 10);
 
+        Button exportDebug = ui.button(text.get("unsent_history_export_debug"));
+        exportDebug.setTag("unsent_history_export_debug");
+        exportDebug.setOnClickListener(view -> exportDebugReport());
+        ui.add(root, exportDebug, 10);
+
         Button clear = ui.button(text.get("unsent_history_clear"));
         clear.setTag("unsent_history_clear");
         clear.setOnClickListener(view -> confirmClear());
@@ -79,7 +90,8 @@ public final class UnsentHistoryActivity extends Activity {
             Settings.unsentCaptureHits(), Settings.unsentCaptureSaved(),
             Settings.unsentRevokeHits(), Settings.unsentRevokeSaved()) + "\n" +
             text.get("unsent_history_notification_diagnostics",
-                Settings.unsentNotificationHits(), Settings.unsentNotificationSaved()));
+                Settings.unsentNotificationHits(), Settings.unsentNotificationSaved()) + "\n" +
+            UnsentDiagnostics.summary(this));
         list.removeAllViews();
         List<AntiUnsendStore.Entry> entries;
         List<AntiUnsendStore.NotificationEntry> notificationEntries;
@@ -87,7 +99,9 @@ public final class UnsentHistoryActivity extends Activity {
             AntiUnsendStore store = AntiUnsendStore.get(this);
             entries = store.listUnsent(500);
             notificationEntries = store.listNotificationSnapshots(30);
+            UnsentDiagnostics.record(this, "history.read", "ok");
         } catch (RuntimeException error) {
+            UnsentDiagnostics.record(this, "history.read", "db_error");
             Settings.hookFailedPrivately("keep_unsent", "Can't read unsent history", error);
             TextView failed = ui.text(text.get("unsent_history_read_failed"), 14, ui.muted, false);
             failed.setTag("unsent_history_error");
@@ -143,6 +157,42 @@ public final class UnsentHistoryActivity extends Activity {
                     dates.format(new Date(entry.postedAt))), 12, ui.muted, false), 10);
                 ui.add(list, card, 12);
             }
+        }
+    }
+
+    private void exportDebugReport() {
+        pendingDebugReport = UnsentDiagnostics.report(this);
+        UnsentDiagnostics.record(this, "diagnostics.export", "started");
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/json");
+        intent.putExtra(Intent.EXTRA_TITLE, "HushMessenger-Unsend-Diagnostics.json");
+        try {
+            startActivityForResult(intent, DEBUG_EXPORT_REQUEST);
+        } catch (RuntimeException error) {
+            UnsentDiagnostics.record(this, "diagnostics.export", "failed");
+            Settings.hookFailedPrivately("keep_unsent", "Can't start diagnostics export", error);
+            Toast.makeText(this, text.get("unsent_history_debug_failed"), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != DEBUG_EXPORT_REQUEST || resultCode != RESULT_OK || data == null) return;
+        Uri uri = data.getData();
+        if (uri == null || pendingDebugReport == null) return;
+        try (OutputStream output = getContentResolver().openOutputStream(uri)) {
+            if (output == null) throw new java.io.IOException("No output stream");
+            output.write(pendingDebugReport.getBytes(StandardCharsets.UTF_8));
+            output.flush();
+            UnsentDiagnostics.record(this, "diagnostics.export", "saved");
+            Toast.makeText(this, text.get("unsent_history_debug_saved"), Toast.LENGTH_SHORT).show();
+        } catch (Exception error) {
+            UnsentDiagnostics.record(this, "diagnostics.export", "failed");
+            Settings.hookFailedPrivately("keep_unsent", "Can't write diagnostics report", error);
+            Toast.makeText(this, text.get("unsent_history_debug_failed"), Toast.LENGTH_LONG).show();
+        } finally {
+            pendingDebugReport = null;
         }
     }
 

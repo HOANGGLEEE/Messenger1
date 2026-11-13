@@ -51,6 +51,9 @@ public final class Settings {
         installed = Collections.unmodifiableSet(features);
         // Set last: a hook that sees preferences also sees the installed controls.
         preferences = appContext.getSharedPreferences("hushmessenger", Context.MODE_PRIVATE);
+        UnsentDiagnostics.record(appContext, "runtime.initialize", "ok");
+        UnsentDiagnostics.record(appContext, "feature.keep_unsent",
+                installed.contains("keep_unsent") ? "installed" : "not_installed");
     }
 
     static Set<String> bundled(String list) {
@@ -203,6 +206,9 @@ public final class Settings {
     }
     public static boolean hideReadReceipts() { return enabled("hide_read_receipts"); }
     public static boolean keepUnsent() { return wouldUse("keep_unsent"); }
+    public static void noteUnsentIntentHook(boolean active) {
+        UnsentDiagnostics.record(appContext, "hook.intent", active ? "enabled" : "disabled");
+    }
     public static boolean viewStoriesAnonymously() { return enabled("anonymous_stories"); }
     public static boolean saveAnyStory() { return enabled("save_stories"); }
 
@@ -363,13 +369,25 @@ public final class Settings {
      * bundles do not reliably expose Messenger message IDs, so these rows are never marked unsent.
      */
     public static void captureNotification(Notification notification) {
-        if (notification == null || !wouldUse("keep_unsent")) return;
+        UnsentDiagnostics.record(appContext, "notification.callback",
+                notification == null ? "null" : "entered");
+        if (notification == null) return;
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "notification.skip", "disabled");
+            return;
+        }
         incrementUnsentCounter(UNSENT_NOTIFICATION_HITS);
         Context context = appContext;
-        if (context == null) return;
+        if (context == null) {
+            UnsentDiagnostics.record(appContext, "notification.skip", "no_context");
+            return;
+        }
         try {
             Bundle extras = notification.extras;
-            if (extras == null) return;
+            if (extras == null) {
+                UnsentDiagnostics.record(appContext, "notification.skip", "no_extras");
+                return;
+            }
             String title = notificationText(extras,
                 "android.conversationTitle", "android.title.big", "android.title",
                 "android.hiddenConversationTitle");
@@ -391,7 +409,10 @@ public final class Settings {
                         store.captureNotification(title, body, fallbackTime)) saved = 1;
             }
             for (int i = 0; i < saved; i++) incrementUnsentCounter(UNSENT_NOTIFICATION_SAVED);
+            UnsentDiagnostics.record(appContext, "notification.save", saved > 0 ? "saved" : "not_saved");
+            if (saved == 0) UnsentDiagnostics.record(appContext, "notification.skip", "no_payload");
         } catch (RuntimeException error) {
+            UnsentDiagnostics.record(appContext, "notification.save", "db_error");
             hookFailedPrivately("keep_unsent", "Can't cache notification text", error);
         }
     }
@@ -403,15 +424,32 @@ public final class Settings {
      */
     public static void captureIncomingMessage(String messageId, String threadId, String senderId,
             String text, long messageTimestamp) {
-        if (messageId == null || messageId.isEmpty() || text == null || text.isEmpty() || !wouldUse("keep_unsent")) return;
+        UnsentDiagnostics.record(appContext, "capture.callback", "entered");
+        if (messageId == null || messageId.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "capture.skip", "missing_id");
+            return;
+        }
+        if (text == null || text.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "capture.skip", "empty_text");
+            return;
+        }
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "capture.skip", "disabled");
+            return;
+        }
         incrementUnsentCounter(UNSENT_CAPTURE_HITS);
         Context context = appContext;
-        if (context == null) return;
+        if (context == null) {
+            UnsentDiagnostics.record(appContext, "capture.save", "no_context");
+            return;
+        }
         try {
             AntiUnsendStore.get(context).captureText(
                 messageId, threadId, senderId, text, messageTimestamp, System.currentTimeMillis());
             incrementUnsentCounter(UNSENT_CAPTURE_SAVED);
+            UnsentDiagnostics.record(appContext, "capture.save", "ok");
         } catch (RuntimeException error) {
+            UnsentDiagnostics.record(appContext, "capture.save", "db_error");
             hookFailedPrivately("keep_unsent", "Can't cache incoming message text", error);
         }
     }
@@ -422,17 +460,35 @@ public final class Settings {
     }
 
     public static synchronized void recordUnsent(String messageId) {
-        if (messageId == null || messageId.isEmpty() || !wouldUse("keep_unsent")) return;
+        UnsentDiagnostics.record(appContext, "revoke.callback", "entered");
+        if (messageId == null || messageId.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "revoke.skip", "missing_id");
+            return;
+        }
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "revoke.skip", "disabled");
+            return;
+        }
         incrementUnsentCounter(UNSENT_REVOKE_HITS);
         SharedPreferences prefs = preferences;
-        if (prefs == null) return;
+        if (prefs == null) {
+            UnsentDiagnostics.record(appContext, "revoke.skip", "no_preferences");
+            return;
+        }
         Set<String> ids = new HashSet<>(prefs.getStringSet(KEPT_UNSENT_KEY, Collections.emptySet()));
         if (ids.add(messageId)) prefs.edit().putStringSet(KEPT_UNSENT_KEY, ids).apply();
         Context context = appContext;
-        if (context != null) try {
+        if (context == null) {
+            UnsentDiagnostics.record(appContext, "revoke.save", "no_context");
+            activeAt.put("keep_unsent", System.currentTimeMillis());
+            return;
+        }
+        try {
             AntiUnsendStore.get(context).markUnsent(messageId, System.currentTimeMillis());
             incrementUnsentCounter(UNSENT_REVOKE_SAVED);
+            UnsentDiagnostics.record(appContext, "revoke.save", "ok");
         } catch (RuntimeException error) {
+            UnsentDiagnostics.record(appContext, "revoke.save", "db_error");
             // The legacy SharedPreferences marker remains the fallback; database failure must never crash Messenger.
             hookFailedPrivately("keep_unsent", "Can't record unsent message history", error);
         }
@@ -471,14 +527,23 @@ public final class Settings {
      * Cache the text for local history, but never alter what Messenger renders.
      */
     public static String labelKeptUnsent(String text, String messageId) {
-        if (wouldUse("keep_unsent") && text != null && !text.isEmpty()) {
-            captureIncomingMessage(messageId, text);
+        if (text == null) {
+            UnsentDiagnostics.record(appContext, "hook.render_text", "null");
+            return null;
         }
+        if (text.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "hook.render_text", "empty_text");
+            return text;
+        }
+        boolean active = wouldUse("keep_unsent");
+        UnsentDiagnostics.record(appContext, "hook.render_text", active ? "enabled" : "disabled");
+        if (active) captureIncomingMessage(messageId, text);
         return text;
     }
 
-    /** History-only mode never changes Messenger's own unsent state. */
+    /** Observe the model's original unsent flag for diagnostics; never alter Messenger's return value. */
     public static boolean suppressUnsent(boolean original, String messageId) {
+        UnsentDiagnostics.record(appContext, "hook.delta_unsent", original ? "true" : "false");
         return original;
     }
 

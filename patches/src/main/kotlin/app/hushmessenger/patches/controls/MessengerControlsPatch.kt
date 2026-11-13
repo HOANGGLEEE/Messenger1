@@ -118,6 +118,32 @@ internal fun Document.addFeature(key: String) {
     })
 }
 
+internal fun Document.addUnsentDebugMetadata(
+    e2eeCapture: Boolean,
+    deltaHook: Boolean,
+    textRenderHook: Boolean,
+    notificationSites: Int,
+) {
+    val application = getElementsByTagName("application").item(0) as Element
+    val values = listOf(
+        "hush.unsent.e2ee_capture_hook" to e2eeCapture.toString(),
+        "hush.unsent.delta_hook" to deltaHook.toString(),
+        "hush.unsent.text_render_hook" to textRenderHook.toString(),
+        "hush.unsent.notification_hook_sites" to notificationSites.toString(),
+        "hush.unsent.media_capture_hook_sites" to "0",
+    )
+    for ((name, value) in values) {
+        val metadata = application.getElementsByTagName("meta-data")
+        if ((0 until metadata.length).any { (metadata.item(it) as Element).getAttribute("android:name") == name }) {
+            throw PatchException("HushMessenger: $name is already installed. Start with the stock APK.")
+        }
+        application.appendChild(createElement("meta-data").apply {
+            setAttribute("android:name", name)
+            setAttribute("android:value", value)
+        })
+    }
+}
+
 internal fun injectControl(key: String, methods: Map<String, List<MutableMethod>>) {
     // A multi-method control must pass every contract before its first edit.
     for ((hook, selectedMethods) in methods) for (method in selectedMethods) {
@@ -183,16 +209,32 @@ internal fun injectControl(key: String, methods: Map<String, List<MutableMethod>
 private fun controlPatch(key: String, title: String, summary: String, group: String, vararg hooks: String): BytecodePatch {
     var applied = false
     var nativeRoutesApplied = false
+    var unsentE2eeHookInstalled = false
+    var unsentDeltaHookInstalled = false
+    var unsentTextRenderHookInstalled = false
+    var unsentNotificationHookSites = 0
     val featureResources = resourcePatch(description = "Record HushMessenger capability: $key") {
         dependsOn(settingsResources)
         execute {
             applied = false
             nativeRoutesApplied = false
+            unsentE2eeHookInstalled = false
+            unsentDeltaHookInstalled = false
+            unsentTextRenderHookInstalled = false
+            unsentNotificationHookSites = 0
             document("AndroidManifest.xml").use { it.requireFeatureAbsent(key) }
         }
         finalize {
             if (applied) document("AndroidManifest.xml").use {
                 it.addFeature(key)
+                if (key == "keep_unsent") {
+                    it.addUnsentDebugMetadata(
+                        unsentE2eeHookInstalled,
+                        unsentDeltaHookInstalled,
+                        unsentTextRenderHookInstalled,
+                        unsentNotificationHookSites,
+                    )
+                }
                 if (nativeRoutesApplied) it.addNativeBubbleRoutesMetadata()
             }
         }
@@ -206,7 +248,17 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
         compatibleWith(MessengerTarget.COMPATIBILITY)
         dependsOn(settingsExtension, featureResources)
         execute {
-            val selected = hooks.toSet().ifEmpty { setOf(key) }
+            val requested = hooks.toSet().ifEmpty { setOf(key) }
+            // delta_unsent is a verified optional observer on only some checked DEX profiles.
+            // Keep the core history patch compatible with profiles that do not expose this method.
+            val selected = if (key == "keep_unsent" && "delta_unsent" in requested &&
+                discoveredControls["delta_unsent"].isNullOrEmpty()) {
+                requested - "delta_unsent"
+            } else requested
+            if (key == "keep_unsent") {
+                unsentDeltaHookInstalled = "delta_unsent" in selected
+                unsentTextRenderHookInstalled = "unsent_indicator" in selected
+            }
             validateControls(discoveredControls, selected)
             val methods = selected.associateWith { hook ->
                 discoveredControls.getValue(hook).map { original ->
@@ -265,12 +317,15 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
                 e2eeUnsend?.let { (incoming, deleting) ->
                     incoming.injectE2eeIncomingCapture()
                     deleting.injectE2eeDeleteCapture()
+                    unsentE2eeHookInstalled = true
                 }
                 if (key == "keep_unsent") {
+                    var sites = 0
                     notificationCaptureMethods.forEach { (className, methodId) ->
-                        mutableClassDefBy(className).methods.single { it.hookId() == methodId }
+                        sites += mutableClassDefBy(className).methods.single { it.hookId() == methodId }
                             .injectNotificationCapture()
                     }
+                    unsentNotificationHookSites = sites
                 }
             }
             recordControl(key)
@@ -333,7 +388,7 @@ val allowScreenshotPatch = controlPatch("allow_screenshot", "Allow screenshots",
 @Suppress("unused")
 val hideReadReceiptsPatch = controlPatch("hide_read_receipts", "Hide read receipts", "Stops sending read receipts. Opened encrypted chats can stay unread on this phone. Replying or switching this off may notify the sender. Group coverage isn't verified.", "Privacy", "hide_read_receipts", "read_mailbox")
 @Suppress("unused")
-val keepUnsentPatch = controlPatch("keep_unsent", "Unsent message history", "Saves a private local text snapshot when a verified receive or render route exposes it, then marks that local record when Messenger reports an unsend. Messenger's own unsend behavior is left unchanged. It also keeps up to 30 recent notification-text snapshots as a fallback; those fallback rows are not called unsent because Android notifications do not reliably expose Messenger message IDs. Messenger 580 variant 346013370 has a verified E2EE receive/revoke path; other E2EE builds, media attachments and group coverage are not yet verified.", "Privacy", "keep_unsent", "unsent_indicator")
+val keepUnsentPatch = controlPatch("keep_unsent", "Unsent message history", "Saves a private local text snapshot from the render path, observes Messenger's model unsent flag for diagnostics where that optional hook exists, and keeps up to 30 recent notification-text snapshots as a fallback. Messenger's own behavior is unchanged. E2EE capture is verified only for Messenger 580 variant 346013370; Messenger 581 E2EE and media attachments are not yet implemented or verified.", "Privacy", "keep_unsent", "unsent_indicator", "delta_unsent")
 private var anonymousStoriesApplied = false
 
 private val anonymousStoriesResources = resourcePatch(description = "Record HushMessenger capability: anonymous_stories") {

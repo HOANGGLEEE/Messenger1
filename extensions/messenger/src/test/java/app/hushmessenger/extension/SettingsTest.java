@@ -24,6 +24,7 @@ import static org.junit.Assert.*;
 public class SettingsTest {
     @Before public void reset() {
         Settings.initialize(RuntimeEnvironment.getApplication());
+        UnsentDiagnostics.clearForTests(RuntimeEnvironment.getApplication());
         Settings.preferences.edit().clear().commit();
         AntiUnsendStore.get(RuntimeEnvironment.getApplication()).clearForTests();
         Settings.hookErrors.clear();
@@ -104,6 +105,14 @@ public class SettingsTest {
             assertTrue(Settings.isKeptUnsent("retained-message"));
             Settings.preferences.edit().putBoolean("paused", false).commit();
         }
+    }
+
+    @Test @Config(sdk = {28, 36}) public void deltaUnsentObservationIsLoggedWithoutChangingStockResult() {
+        assertTrue(Settings.suppressUnsent(true, "diagnostic-only-id"));
+        assertFalse(Settings.suppressUnsent(false, "diagnostic-only-id"));
+        String report = UnsentDiagnostics.report(RuntimeEnvironment.getApplication());
+        assertTrue(report.contains("\"hook.delta_unsent\": 2"));
+        assertFalse(report.contains("diagnostic-only-id"));
     }
 
     @Test @Config(sdk = {28, 36}) public void e2eeDeleteBatchRecordsEveryStringMessageId() {
