@@ -3,6 +3,7 @@
 ## Development — Messenger 581.0.0.49.91 (build 346213510)
 
 - Added the 581 native parser, QPL materializer and E2EE delete-delta hooks for the local unsent archive. E2EE images are copied only from Messenger's completed, readable local download callback and are linked by direct path plus media-key timestamp to the exact message and thread.
+- Initialized the 581 archive hooks in Messenger's `:background_e2ee` process and routed the Keep unsent switch check through the private main-process provider, so secondary-process preferences and safe-mode state are not silently treated as disabled or stale.
 - Made duplicate and out-of-order revoke callbacks idempotent, preserving the earliest revoke timestamp. Added tests for multiple images, repeated metadata/download callbacks, missing downloads and persistence after reopening the private SQLite archive.
 - Increased the history header gap below the system status-bar inset to 24dp and added inset regression tests.
 - Reworked Send music to create Messenger's native MediaResource and WaveformData, install them in the Xapp voice composer state holder and invoke its native send method. This patch is restricted to build 346213510. End-to-end playback with two Messenger accounts has not yet been verified on a device.
