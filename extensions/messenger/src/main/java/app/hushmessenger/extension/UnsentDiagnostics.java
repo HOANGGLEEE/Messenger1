@@ -46,7 +46,7 @@ public final class UnsentDiagnostics {
         "capture.save", "revoke.callback", "revoke.skip", "revoke.save",
         "notification.callback", "notification.skip", "notification.save", "media.callback",
         "media.skip", "media.capture", "media.save", "history.read", "diagnostics.export",
-        "provider.bridge"
+        "provider.bridge", "object.shape"
     )));
 
     private static final Set<String> RESULTS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
@@ -56,17 +56,22 @@ public final class UnsentDiagnostics {
         "missing_uri", "missing_metadata", "metadata_container_missing", "direct_path_missing",
         "mime_missing", "timestamp_missing", "metadata_type_mismatch", "missing_file", "not_image",
         "unreadable", "too_large", "bad_signature", "linked", "no_images", "duplicate", "forwarded",
-        "provider_unavailable"
+        "provider_unavailable", "downloader", "result", "metadata"
     )));
+
+    private static final Set<String> DETAIL_CATEGORIES = Collections.unmodifiableSet(
+        new HashSet<>(Arrays.asList("downloader", "result", "metadata")));
 
     private static final class Event {
         final long at;
         final String stage;
         final String result;
-        Event(long at, String stage, String result) {
+        final String detail;
+        Event(long at, String stage, String result, String detail) {
             this.at = at;
             this.stage = stage;
             this.result = result;
+            this.detail = detail;
         }
     }
 
@@ -105,8 +110,27 @@ public final class UnsentDiagnostics {
 
     /** Records only allow-listed stage/result tokens. */
     public static void record(Context context, String stage, String result) {
+        recordInternal(context, stage, result, null);
+    }
+
+    /**
+     * Records a redacted Java object shape. Callers must pass field names, field types and
+     * null/set state only; never pass field values, IDs, paths, URLs, text or byte contents.
+     */
+    public static boolean recordObjectShape(Context context, String category, String shape) {
+        if (!DETAIL_CATEGORIES.contains(category) || shape == null || shape.isEmpty()) return false;
+        String safe = shape.replace('\r', ' ').replace('\n', ' ').trim();
+        if (safe.isEmpty()) return false;
+        if (safe.length() > 1800) safe = safe.substring(0, 1800);
+        recordInternal(context, "object.shape", category, safe);
+        return true;
+    }
+
+    private static void recordInternal(Context context, String stage, String result, String detail) {
         String safeStage = STAGES.contains(stage) ? stage : "other";
         String safeResult = RESULTS.contains(result) ? result : "other";
+        String safeDetail = "object.shape".equals(safeStage) && DETAIL_CATEGORIES.contains(safeResult)
+            ? detail : null;
         Context app = appContext(context != null ? context : Settings.appContext);
 
         if (isSecondaryProcess(app) && shouldForward(safeStage, safeResult) &&
@@ -115,6 +139,7 @@ public final class UnsentDiagnostics {
                 Bundle extras = new Bundle();
                 extras.putString("stage", safeStage);
                 extras.putString("result", safeResult);
+                if (safeDetail != null) extras.putString("detail", safeDetail);
                 Bundle response = app.getContentResolver().call(
                     Uri.parse("content://" + app.getPackageName() + ".hush.settings"),
                     SettingsProvider.CALL_RECORD_UNSENT_DEBUG, null, extras);
@@ -126,30 +151,47 @@ public final class UnsentDiagnostics {
                 // Root Mount builds may retain the stock manifest without the private provider.
             }
             providerAvailable = false;
-            recordLocal("provider.bridge", "provider_unavailable");
+            recordLocal("provider.bridge", "provider_unavailable", null);
         }
-        recordLocal(safeStage, safeResult);
+        recordLocal(safeStage, safeResult, safeDetail);
     }
 
     /** Called only by the private main-process provider; never calls ContentResolver again. */
     static boolean recordFromProvider(String stage, String result) {
+        return recordFromProvider(stage, result, null);
+    }
+
+    static boolean recordFromProvider(String stage, String result, String detail) {
         if (!STAGES.contains(stage) || !RESULTS.contains(result)) return false;
-        recordLocal(stage, result);
-        recordLocal("provider.bridge", "forwarded");
+        String safeDetail = null;
+        if ("object.shape".equals(stage)) {
+            if (!DETAIL_CATEGORIES.contains(result) || detail == null) return false;
+            safeDetail = detail.replace('\r', ' ').replace('\n', ' ').trim();
+            if (safeDetail.isEmpty()) return false;
+            if (safeDetail.length() > 1800) safeDetail = safeDetail.substring(0, 1800);
+        } else if (detail != null) {
+            return false;
+        }
+        recordLocal(stage, result, safeDetail);
+        recordLocal("provider.bridge", "forwarded", null);
         return true;
     }
 
     private static void recordLocal(String stage, String result) {
+        recordLocal(stage, result, null);
+    }
+
+    private static void recordLocal(String stage, String result, String detail) {
         COUNTERS.computeIfAbsent(stage, ignored -> new AtomicLong()).incrementAndGet();
         synchronized (LOCK) {
             while (EVENTS.size() >= MAX_EVENTS) EVENTS.removeFirst();
-            EVENTS.addLast(new Event(System.currentTimeMillis(), stage, result));
+            EVENTS.addLast(new Event(System.currentTimeMillis(), stage, result, detail));
         }
-        // Stage/result values are allow-listed and contain no message or account data.
-        // Log sampled parser and hook entries too, so short-lived secondary processes remain diagnosable.
+        // Stage/result tokens and redacted object shapes contain no runtime field values.
         String process = Build.VERSION.SDK_INT >= 28 ? Application.getProcessName() : "unknown";
         if (process == null || process.isEmpty()) process = "unknown";
-        Log.i(TAG, process + " " + stage + "=" + result);
+        Log.i(TAG, process + " " + stage + "=" + result +
+            (detail == null ? "" : " detail=" + detail));
     }
 
     private static long count(String stage) {
@@ -233,10 +275,10 @@ public final class UnsentDiagnostics {
                 : app.getSharedPreferences("hushmessenger", Context.MODE_PRIVATE);
             Bundle meta = metadata(app);
             JSONObject root = new JSONObject();
-            root.put("schema", "hush-unsent-debug-v2");
+            root.put("schema", "hush-unsent-debug-v3");
             root.put("exportedAtEpochMs", System.currentTimeMillis());
             root.put("sessionOnly", true);
-            root.put("privacy", "No message text, message IDs, account IDs, attachment URLs or media bytes are included.");
+            root.put("privacy", "No message text, message IDs, account IDs, attachment URLs, field values or media bytes are included. Object-shape details contain only class names, field names, field types and null/set state.");
 
             JSONObject device = new JSONObject();
             device.put("manufacturer", Build.MANUFACTURER);
@@ -295,6 +337,7 @@ public final class UnsentDiagnostics {
                     event.put("atEpochMs", item.at);
                     event.put("stage", item.stage);
                     event.put("result", item.result);
+                    if (item.detail != null) event.put("detail", item.detail);
                     events.put(event);
                 }
             }
