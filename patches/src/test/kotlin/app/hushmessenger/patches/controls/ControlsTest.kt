@@ -67,6 +67,47 @@ class ControlsTest {
         })
     }
 
+    private fun messenger581ApplicationOnCreate(
+        flags: Int = AccessFlags.PUBLIC.value,
+        name: String = "onCreate",
+        parameters: List<String> = emptyList(),
+        returnType: String = "V",
+    ) = MutableMethod(ImmutableMethod(
+        "Lcom/facebook/messenger/app/MessengerApplication;",
+        name,
+        parameters.map { ImmutableMethodParameter(it, null, null) },
+        returnType,
+        flags,
+        null,
+        null,
+        ImmutableMethodImplementation(1, emptyList(), null, null),
+    )).apply { addInstructionsWithLabels(0, "return-void") }
+
+    @Test fun messenger581ApplicationInitializesSettingsInEveryProcess() {
+        val app = messenger581ApplicationOnCreate()
+        app.injectMessenger581ApplicationInitialization()
+        val code = app.implementation!!.instructions
+        assertEquals(Opcode.INVOKE_STATIC, code.first().opcode)
+        assertEquals(
+            "$SETTINGS->initialize(Landroid/content/Context;)V",
+            (code.first() as ReferenceInstruction).reference.toString(),
+        )
+        assertEquals(Opcode.RETURN_VOID, code.last().opcode)
+    }
+
+    @Test fun changedMessenger581ApplicationInitializerFailsBeforeEditing() {
+        for (changed in listOf(
+            messenger581ApplicationOnCreate(flags = AccessFlags.PUBLIC.value or AccessFlags.STATIC.value),
+            messenger581ApplicationOnCreate(name = "onStart"),
+            messenger581ApplicationOnCreate(parameters = listOf("Landroid/os/Bundle;")),
+            messenger581ApplicationOnCreate(returnType = "Z"),
+        )) {
+            val before = changed.implementation!!.instructions.toList()
+            assertFailsWith<PatchException> { changed.injectMessenger581ApplicationInitialization() }
+            assertEquals(before, changed.implementation!!.instructions.toList())
+        }
+    }
+
     @Test fun notificationFallbackCopiesTheNotificationThenKeepsTheStockNotifyCall() {
         val post = MutableMethod(ImmutableMethod(
             "Lfixture/Notifications;", "post", emptyList(),
