@@ -42,8 +42,14 @@ public class UnsentDiagnosticsTest {
             "Lx/Result;[A00:Landroid/net/Uri;=set,A01:Ljava/lang/Throwable;=null]"));
         assertFalse(UnsentDiagnostics.recordObjectShape(context, "downloader",
             "private-message-id"));
+        assertFalse(UnsentDiagnostics.recordObjectShape(context, "downloader",
+            "Lx/Downloader;[messageId:java.lang.String=secret]"));
         assertFalse(UnsentDiagnostics.recordObjectShape(context, "unknown",
             "Lx/Downloader;"));
+        assertFalse(UnsentDiagnostics.recordFromProvider("object.shape", "downloader",
+            "private-message-id"));
+        assertTrue(UnsentDiagnostics.recordFromProvider("object.shape", "metadata",
+            "Lx/Metadata;[directPath:java.lang.String=set]"));
 
         JSONObject report = new JSONObject(UnsentDiagnostics.report(context));
         String json = report.toString();
