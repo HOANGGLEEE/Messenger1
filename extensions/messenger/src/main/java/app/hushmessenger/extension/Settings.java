@@ -705,6 +705,8 @@ public final class Settings {
             return;
         }
         try {
+            Object metadata = readDeclaredField(downloader, "A07");
+            logMediaMetadataShape(downloader, result, metadata);
             Object resultUri = readDeclaredField(result, "A00");
             Object resultError = readDeclaredField(result, "A01");
             if (!(resultUri instanceof Uri) || resultError != null) {
@@ -716,8 +718,6 @@ public final class Settings {
                 UnsentDiagnostics.record(appContext, "media.skip", "missing_file");
                 return;
             }
-            Object metadata = readDeclaredField(downloader, "A07");
-            logMediaMetadataShape(downloader, result, metadata);
             if (metadata == null) {
                 UnsentDiagnostics.record(appContext, "media.skip", "metadata_container_missing");
                 return;
