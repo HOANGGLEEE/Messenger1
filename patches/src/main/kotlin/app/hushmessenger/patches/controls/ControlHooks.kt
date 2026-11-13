@@ -1272,6 +1272,27 @@ internal fun MutableMethod.injectE2eeDeleteCapture(messenger581: Boolean = false
  * Messenger 581 converts the message-model fragment into QPL after the encrypted payload has
  * been materialized. This model carries stable message/thread IDs, unsent state and image metadata.
  */
+/**
+ * Messenger 581 runs encrypted receive and media callbacks in :background_e2ee. Its SettingsProvider
+ * belongs to the main process, so initialize this extension's process-local context from the real
+ * Application lifecycle in every process before any message hook can run.
+ */
+internal fun MutableMethod.validateMessenger581ApplicationInitialization() {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Keep unsent: Messenger 581 Application.onCreate has no code")
+    if (definingClass != "Lcom/facebook/messenger/app/MessengerApplication;" ||
+        name != "onCreate" || returnType != "V" || parameterTypes.isNotEmpty() ||
+        AccessFlags.STATIC.isSet(accessFlags) || implementation!!.registerCount < 1 || code.isEmpty()) {
+        throw PatchException("Keep unsent: Messenger 581 Application initialization contract changed")
+    }
+}
+
+internal fun MutableMethod.injectMessenger581ApplicationInitialization() {
+    validateMessenger581ApplicationInitialization()
+    addInstructions(0,
+        "invoke-static {p0}, $SETTINGS->initialize(Landroid/content/Context;)V")
+}
+
 internal fun MutableMethod.injectMessenger581MaterializedMessageCapture() {
     val code = implementation?.instructions?.toList()
         ?: throw PatchException("Keep unsent: Messenger 581 message materializer has no code")
