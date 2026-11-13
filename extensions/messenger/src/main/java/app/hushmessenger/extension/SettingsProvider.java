@@ -9,6 +9,7 @@ import android.os.Bundle;
 /** Initializes preferences before the main process executes UI hooks. Never exported. */
 public final class SettingsProvider extends ContentProvider {
     static final String CALL_KEEP_UNSENT_ENABLED = "hush.get_keep_unsent_enabled";
+    static final String CALL_RECORD_UNSENT_DEBUG = "hush.record_unsent_debug";
 
     @Override public boolean onCreate() {
         Settings.initialize(getContext());
@@ -22,6 +23,13 @@ public final class SettingsProvider extends ContentProvider {
         if (CALL_KEEP_UNSENT_ENABLED.equals(method)) {
             Bundle result = new Bundle();
             result.putBoolean("enabled", Settings.keepUnsentEnabledLocally());
+            return result;
+        }
+        if (CALL_RECORD_UNSENT_DEBUG.equals(method)) {
+            Bundle result = new Bundle();
+            boolean accepted = extras != null && UnsentDiagnostics.recordFromProvider(
+                extras.getString("stage"), extras.getString("result"));
+            result.putBoolean("accepted", accepted);
             return result;
         }
         return super.call(method, arg, extras);
