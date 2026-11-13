@@ -61,7 +61,8 @@ public class UnsentDiagnosticsTest {
         JSONObject report = new JSONObject(UnsentDiagnostics.report(context));
         String json = report.toString();
         assertTrue(json.contains("object.shape"));
-        assertTrue(json.contains("Lx/Downloader;"));
+        assertTrue("Diagnostic report did not export object shape: " + json,
+            json.contains("Lx/Downloader;"));
         assertTrue(json.contains("A07:Lx/Metadata;=set"));
         assertFalse(json.contains("private-message-id"));
     }
