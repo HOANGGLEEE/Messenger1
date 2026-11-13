@@ -46,7 +46,7 @@ public final class UnsentDiagnostics {
         "capture.save", "revoke.callback", "revoke.skip", "revoke.save",
         "notification.callback", "notification.skip", "notification.save", "media.callback",
         "media.skip", "media.capture", "media.save", "history.read", "diagnostics.export",
-        "provider.bridge", "object.shape"
+        "provider.bridge", "object.shape", "materializer.entry"
     )));
 
     private static final Set<String> RESULTS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
@@ -60,7 +60,8 @@ public final class UnsentDiagnostics {
     )));
 
     private static final Set<String> DETAIL_CATEGORIES = Collections.unmodifiableSet(
-        new HashSet<>(Arrays.asList("downloader", "result", "metadata")));
+        new HashSet<>(Arrays.asList("downloader", "result", "metadata", "qpl", "content",
+            "message_content", "image_container", "image_item")));
 
     private static final class Event {
         final long at;
@@ -98,6 +99,8 @@ public final class UnsentDiagnostics {
     /** Entry-only observations are sampled once per process; save/skip outcomes are forwarded. */
     private static boolean shouldForward(String stage, String result) {
         boolean sample = "parser.entry".equals(stage) ||
+            "materializer.entry".equals(stage) ||
+            "object.shape".equals(stage) ||
             "model.callback".equals(stage) ||
             "capture.callback".equals(stage) ||
             "hook.render_text".equals(stage) ||
