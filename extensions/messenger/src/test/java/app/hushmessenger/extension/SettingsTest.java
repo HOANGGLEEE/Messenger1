@@ -106,6 +106,14 @@ public class SettingsTest {
         }
     }
 
+    @Test @Config(sdk = {28, 36}) public void deltaUnsentObservationIsLoggedWithoutChangingStockResult() {
+        assertTrue(Settings.suppressUnsent(true, "diagnostic-only-id"));
+        assertFalse(Settings.suppressUnsent(false, "diagnostic-only-id"));
+        String report = UnsentDiagnostics.report(RuntimeEnvironment.getApplication());
+        assertTrue(report.contains("\\"hook.delta_unsent\\": 2"));
+        assertFalse(report.contains("diagnostic-only-id"));
+    }
+
     @Test @Config(sdk = {28, 36}) public void e2eeDeleteBatchRecordsEveryStringMessageId() {
         Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
         Settings.recordUnsentIds(java.util.Arrays.asList("e2ee-a", 7, null, "", "e2ee-b"));
