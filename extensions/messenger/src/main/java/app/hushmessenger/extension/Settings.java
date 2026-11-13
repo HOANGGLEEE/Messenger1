@@ -690,8 +690,8 @@ public final class Settings {
 
     /**
      * Messenger 581 download callback: p0 is SUm (metadata in A07), p1 is the result object.
-     * Its Uri is used only to confirm success; the filesystem File is resolved through the same
-     * A0F(directPath) helper Messenger itself uses in this callback.
+     * Its Uri supplies the completed local path; Messenger resolves the filesystem File through
+     * A0F(localPath). The metadata directPath is a separate stable key for matching the image to its message.
      */
     public static void captureDownloadedImageFromCallback(Object downloader, Object result) {
         UnsentDiagnostics.record(appContext, "media.callback", "entered");
