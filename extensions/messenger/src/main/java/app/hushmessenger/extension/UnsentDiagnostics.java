@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class UnsentDiagnostics {
     private static final String TAG = "HushMessengerUnsend";
-    private static final int MAX_EVENTS = 80;
+    private static final int MAX_EVENTS = 200;
     private static final Object LOCK = new Object();
     private static final ConcurrentHashMap<String, AtomicLong> COUNTERS = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, AtomicBoolean> FORWARDED_SAMPLES = new ConcurrentHashMap<>();
@@ -53,8 +53,9 @@ public final class UnsentDiagnostics {
         "ok", "installed", "not_installed", "enabled", "disabled", "entered", "true", "false",
         "null", "missing_id", "empty_text", "no_context", "no_preferences", "no_extras",
         "no_payload", "db_error", "saved", "not_saved", "started", "failed", "other",
-        "missing_uri", "missing_metadata", "missing_file", "not_image", "unreadable",
-        "too_large", "bad_signature", "linked", "no_images", "duplicate", "forwarded",
+        "missing_uri", "missing_metadata", "metadata_container_missing", "direct_path_missing",
+        "mime_missing", "timestamp_missing", "metadata_type_mismatch", "missing_file", "not_image",
+        "unreadable", "too_large", "bad_signature", "linked", "no_images", "duplicate", "forwarded",
         "provider_unavailable"
     )));
 
@@ -144,11 +145,11 @@ public final class UnsentDiagnostics {
             while (EVENTS.size() >= MAX_EVENTS) EVENTS.removeFirst();
             EVENTS.addLast(new Event(System.currentTimeMillis(), stage, result));
         }
-        if ("hook.delta_unsent".equals(stage) && "false".equals(result)) return;
-        if ("hook.render_text".equals(stage) || "parser.entry".equals(stage) ||
-                ("capture.callback".equals(stage) && "entered".equals(result)) ||
-                ("model.callback".equals(stage) && "entered".equals(result))) return;
-        Log.i(TAG, stage + "=" + result);
+        // Stage/result values are allow-listed and contain no message or account data.
+        // Log sampled parser and hook entries too, so short-lived secondary processes remain diagnosable.
+        String process = Build.VERSION.SDK_INT >= 28 ? Application.getProcessName() : "unknown";
+        if (process == null || process.isEmpty()) process = "unknown";
+        Log.i(TAG, process + " " + stage + "=" + result);
     }
 
     private static long count(String stage) {
