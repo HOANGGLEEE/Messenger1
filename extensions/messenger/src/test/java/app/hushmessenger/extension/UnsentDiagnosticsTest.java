@@ -33,7 +33,7 @@ public class UnsentDiagnosticsTest {
         assertFalse(report.contains("private-text"));
     }
 
-    @Test public void summaryIdentifiesMissingMediaHookWithoutClaimingMediaWasSaved() {
+    @Test public void summaryReportsMediaHookStatusField() {
         String summary = UnsentDiagnostics.summary(context);
         assertTrue(summary.contains("Media:"));
     }
