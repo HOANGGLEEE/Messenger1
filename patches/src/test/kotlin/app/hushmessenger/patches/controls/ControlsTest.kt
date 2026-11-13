@@ -145,24 +145,27 @@ class ControlsTest {
             null,
             ImmutableMethodImplementation(5, emptyList(), null, null),
         ))
-        val body = listOf("const/4 v0, 0x0", "const/4 v0, 0x0", "const/4 v0, 0x0") +
-            "invoke-super {p0, p1, p2}, Lcom/facebook/mig/bottomsheet/MigBottomSheetDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V" +
-            List(49) { "nop" } + "return-void"
-        method.addInstructionsWithLabels(0, body.joinToString("\n"))
+        val body = """
+            invoke-static {v3}, LX/33S;->A0j(Ljava/lang/Object;)V
+            invoke-super {v2, v3, v4}, Lcom/facebook/mig/bottomsheet/MigBottomSheetDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V
+            nop
+            return-void
+        """.trimIndent()
+        method.addInstructionsWithLabels(0, body)
         return method
     }
 
     @Test fun sendMusicButtonHooksOnlyAfterTheNativeRecordingSheetIsInitialized() {
         val method = sendMusicFixture()
-        assertEquals(4, method.validateSendMusic())
+        assertEquals(2, method.validateSendMusic())
         method.injectSendMusic()
         val code = method.implementation!!.instructions
-        assertEquals(Opcode.INVOKE_STATIC_RANGE, code[4].opcode)
+        assertEquals(Opcode.INVOKE_STATIC_RANGE, code[2].opcode)
         assertEquals(
             "Lapp/hushmessenger/extension/AudioPickerBridge;->install(Ljava/lang/Object;)V",
-            (code[4] as ReferenceInstruction).reference.toString(),
+            (code[2] as ReferenceInstruction).reference.toString(),
         )
-        assertEquals(55, code.size)
+        assertEquals(5, code.size)
     }
 
     @Test fun changedSendMusicSheetContractFailsBeforeEditing() {
@@ -171,7 +174,7 @@ class ControlsTest {
         val changed = method.implementation!!.instructions.toList()
         assertFailsWith<PatchException> { method.injectSendMusic() }
         assertEquals(changed, method.implementation!!.instructions.toList())
-        assertEquals(55, changed.size)
+        assertEquals(5, changed.size)
     }
 
     @Test fun missingOrAmbiguousAnchorsRejectTheApk() {
