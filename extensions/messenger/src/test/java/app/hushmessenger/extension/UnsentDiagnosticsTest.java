@@ -28,11 +28,29 @@ public class UnsentDiagnosticsTest {
         assertFalse(UnsentDiagnostics.recordFromProvider("capture.callback", "private-message-id"));
 
         JSONObject report = new JSONObject(UnsentDiagnostics.report(context));
-        assertEquals("hush-unsent-debug-v2", report.getString("schema"));
+        assertEquals("hush-unsent-debug-v3", report.getString("schema"));
         assertTrue(report.getJSONObject("counters").getLong("capture.callback") >= 1);
         assertTrue(report.getJSONObject("counters").getLong("provider.bridge") >= 1);
         assertFalse(report.toString().contains("private-message-id"));
         assertFalse(report.toString().contains("private chat text"));
+    }
+
+    @Test public void reportIncludesOnlyRedactedImageCallbackObjectShapes() throws Exception {
+        assertTrue(UnsentDiagnostics.recordObjectShape(context, "downloader",
+            "Lx/Downloader;[A07:Lx/Metadata;=set,A01:Ljava/lang/String;=null]"));
+        assertTrue(UnsentDiagnostics.recordObjectShape(context, "result",
+            "Lx/Result;[A00:Landroid/net/Uri;=set,A01:Ljava/lang/Throwable;=null]"));
+        assertFalse(UnsentDiagnostics.recordObjectShape(context, "downloader",
+            "private-message-id"));
+        assertFalse(UnsentDiagnostics.recordObjectShape(context, "unknown",
+            "Lx/Downloader;"));
+
+        JSONObject report = new JSONObject(UnsentDiagnostics.report(context));
+        String json = report.toString();
+        assertTrue(json.contains("object.shape"));
+        assertTrue(json.contains("Lx/Downloader;"));
+        assertTrue(json.contains("A07:Lx/Metadata;=set"));
+        assertFalse(json.contains("private-message-id"));
     }
 
     @Test public void summaryReportsMediaAndCrossProcessHookStatus() {
