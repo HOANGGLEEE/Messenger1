@@ -986,17 +986,25 @@ internal fun MutableMethod.injectKeyboardTabsInline() {
 internal fun MutableMethod.validateSendMusic(): Int {
     val code = implementation?.instructions?.toList()
         ?: throw PatchException("Messenger controls: send-music recording sheet has no code")
+    val setup = code.firstOrNull()
+    val setupCall = setup as? FiveRegisterInstruction
+    val setupReference = (setup as? ReferenceInstruction)?.reference as? DexMethodReference
     val superCalls = code.indices.filter { index ->
         code[index].opcode == Opcode.INVOKE_SUPER &&
             (code[index] as? ReferenceInstruction)?.reference?.toString() ==
             "Lcom/facebook/mig/bottomsheet/MigBottomSheetDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V"
     }
     val call = code.getOrNull(superCalls.singleOrNull() ?: -1) as? FiveRegisterInstruction
+    val validSetup = setup?.opcode == Opcode.INVOKE_STATIC &&
+        setupReference?.toString() == "LX/33S;->A0j(Ljava/lang/Object;)V" &&
+        setupCall?.let { it.registerCount == 1 && it.registerC == 3 } == true
+    val validSuper = call?.let {
+        it.registerCount == 3 && it.registerC == 2 && it.registerD == 3 && it.registerE == 4
+    } == true
     if (definingClass != XAPP_RECORDING_CONTROLS || name != "onViewCreated" ||
         returnType != "V" || parameterTypes != listOf("Landroid/view/View;", "Landroid/os/Bundle;") ||
-        AccessFlags.STATIC.isSet(accessFlags) || implementation!!.registerCount != 5 ||
-        code.size != 54 || superCalls != listOf(3) || call?.registerCount != 3 ||
-        call.registerC != 2 || call.registerD != 3 || call.registerE != 4) {
+        AccessFlags.STATIC.isSet(accessFlags) || implementation?.registerCount != 5 ||
+        code.size < 3 || superCalls != listOf(1) || !validSetup || !validSuper) {
         throw PatchException("Messenger controls: Messenger 581 audio recording sheet changed")
     }
     return superCalls.single() + 1
