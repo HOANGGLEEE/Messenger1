@@ -791,10 +791,12 @@ public final class Settings {
     }
 
     private static void logMediaMetadataShape(Object downloader, Object result, Object metadata) {
-        android.util.Log.i("HushMessengerUnsend",
-            "media.metadata_shape downloader=" + safeObjectShape(downloader) +
-            " result=" + safeObjectShape(result) +
-            " metadata=" + safeObjectShape(metadata));
+        // Keep only class/field/type/null-state information in the report; never field values.
+        UnsentDiagnostics.recordObjectShape(appContext, "downloader", safeObjectShape(downloader));
+        UnsentDiagnostics.recordObjectShape(appContext, "result", safeObjectShape(result));
+        if (metadata != null) {
+            UnsentDiagnostics.recordObjectShape(appContext, "metadata", safeObjectShape(metadata));
+        }
     }
 
     public static void captureDownloadedImage(String directPath, String mimeType,
