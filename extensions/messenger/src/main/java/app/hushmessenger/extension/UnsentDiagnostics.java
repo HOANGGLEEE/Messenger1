@@ -136,17 +136,17 @@ public final class UnsentDiagnostics {
             device.put("abis", join(Build.SUPPORTED_ABIS));
             root.put("device", device);
 
-            JSONObject app = new JSONObject();
-            app.put("package", appContext.getPackageName());
+            JSONObject appInfo = new JSONObject();
+            appInfo.put("package", app.getPackageName());
             try {
-                PackageInfo info = appContext.getPackageManager().getPackageInfo(appContext.getPackageName(), 0);
-                app.put("versionName", info.versionName == null ? "" : info.versionName);
-                app.put("versionCode", info.getLongVersionCode());
+                PackageInfo info = app.getPackageManager().getPackageInfo(app.getPackageName(), 0);
+                appInfo.put("versionName", info.versionName == null ? "" : info.versionName);
+                appInfo.put("versionCode", info.getLongVersionCode());
             } catch (PackageManager.NameNotFoundException ignored) {
-                app.put("versionName", "unknown");
-                app.put("versionCode", -1);
+                appInfo.put("versionName", "unknown");
+                appInfo.put("versionCode", -1);
             }
-            root.put("app", app);
+            root.put("app", appInfo);
 
             JSONObject runtime = new JSONObject();
             boolean installed = Settings.installed != null && Settings.installed.contains("keep_unsent");
