@@ -233,6 +233,9 @@ final class SettingsText {
         ENGLISH.put("unsent_history_help", "Stored only on this device. Messages appear when Messenger exposes their message ID and unsent state. Photos can be copied only after Messenger downloads them.");
         ENGLISH.put("unsent_history_diagnostics", "Valid message IDs: %d, saved: %d • Unsent marked: %d, stored: %d");
         ENGLISH.put("unsent_history_notification_diagnostics", "Notification fallback: %d hooks, %d new snapshots");
+        ENGLISH.put("unsent_history_export_debug", "Export debug report");
+        ENGLISH.put("unsent_history_debug_saved", "Debug report saved");
+        ENGLISH.put("unsent_history_debug_failed", "Couldn\'t export the debug report.");
         ENGLISH.put("unsent_history_media_diagnostics", "Valid images: %d, saved locally: %d");
         ENGLISH.put("unsent_history_image_description", "Image attachment saved locally before the message was unsent");
         ENGLISH.put("unsent_history_confirmed_section", "Matched unsent messages");

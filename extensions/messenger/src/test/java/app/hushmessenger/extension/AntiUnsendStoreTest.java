@@ -228,4 +228,81 @@ public class AntiUnsendStoreTest {
             oldImage.delete();
         }
     }
+
+    @Test public void duplicateAndOutOfOrderRevokesKeepOneRowAndEarliestTimestamp() {
+        store.captureMessageMetadata("m8", "thread-8", "sender-8", 800, 100);
+        store.markUnsent("m8", 130);
+        store.markUnsent("m8", 150);
+        store.markUnsent("m8", 120);
+
+        var entries = store.listUnsent(10);
+        assertEquals(1, entries.size());
+        assertEquals("m8", entries.get(0).messageId);
+        assertEquals(120, entries.get(0).unsentAt);
+    }
+
+    @Test public void multipleImagesAndRepeatedMetadataStayLinkedToTheirExactMessage() throws Exception {
+        store.captureMessageMetadata("m9", "thread-9", "sender-9", 900, 100);
+        store.captureMediaMetadataForMessage("/cdn/image/one", "m9", "thread-9",
+            901, "image/jpeg", 101);
+        store.captureMediaMetadataForMessage("/cdn/image/two", "m9", "thread-9",
+            902, "image/png", 102);
+        // A repeated model event must update the existing media row, not create another one.
+        store.captureMediaMetadataForMessage("/cdn/image/one", "m9", "thread-9",
+            901, "image/jpeg", 103);
+
+        java.io.File one = new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(), "m9-one.jpg");
+        java.io.File two = new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(), "m9-two.png");
+        try {
+            assertTrue(one.createNewFile());
+            assertTrue(two.createNewFile());
+            assertTrue(store.saveMediaFile("/cdn/image/one", 901, one.getAbsolutePath(), 104));
+            // Repeated completion callback for the same media identity must remain one row.
+            assertTrue(store.saveMediaFile("/cdn/image/one", 901, one.getAbsolutePath(), 106));
+            assertTrue(store.saveMediaFile("/cdn/image/two", 902, two.getAbsolutePath(), 105));
+            store.markUnsent("m9", 110);
+            var images = store.listUnsentMedia("m9");
+            assertEquals(2, images.size());
+            assertEquals("m9", images.get(0).messageId);
+            assertEquals("m9", images.get(1).messageId);
+            assertTrue(images.stream().anyMatch(item -> one.getAbsolutePath().equals(item.localPath)));
+            assertTrue(images.stream().anyMatch(item -> two.getAbsolutePath().equals(item.localPath)));
+        } finally {
+            one.delete();
+            two.delete();
+        }
+    }
+
+    @Test public void metadataWithoutACompletedDownloadDoesNotInventAnImageFile() {
+        store.captureMessageMetadata("m10", "thread-10", "sender-10", 1000, 100);
+        store.captureMediaMetadataForMessage("/cdn/image/not-downloaded", "m10", "thread-10",
+            1010, "image/jpeg", 101);
+        store.markUnsent("m10", 110);
+        assertTrue(store.listUnsentMedia("m10").isEmpty());
+    }
+
+
+    @Test public void textAndPrivateImageSurviveDatabaseReopen() throws Exception {
+        store.captureText("m11", "thread-11", "sender-11", "persisted text", 1100, 100);
+        store.captureMediaMetadataForMessage("/cdn/image/persist", "m11", "thread-11",
+            1110, "image/jpeg", 101);
+        java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(), "m11-persisted.jpg");
+        try {
+            assertTrue(image.createNewFile());
+            assertTrue(store.saveMediaFile("/cdn/image/persist", 1110, image.getAbsolutePath(), 102));
+            store.markUnsent("m11", 103);
+
+            // Closing and reopening SQLite simulates a fresh process reading the same private archive.
+            store.close();
+            store = AntiUnsendStore.get(RuntimeEnvironment.getApplication());
+            assertEquals("persisted text", store.unsentText("m11"));
+            var images = store.listUnsentMedia("m11");
+            assertEquals(1, images.size());
+            assertEquals(image.getAbsolutePath(), images.get(0).localPath);
+            assertTrue(new java.io.File(images.get(0).localPath).exists());
+        } finally {
+            image.delete();
+        }
+    }
+
 }

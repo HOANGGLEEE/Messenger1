@@ -76,7 +76,7 @@ object CatalogTool {
     ))
 
     fun validateDefinitions(patchSource: String, uiSource: String, manifest: String, names: Set<String>): Int {
-        val declarations = (Regex("""controlPatch\("([a-z_]+)",\s*"([^"]+)"""").findAll(patchSource)
+        val declarations = (Regex("""controlPatch\(\s*"([a-z_]+)",\s*"([^"]+)"""").findAll(patchSource)
             .map { it.groupValues[1] to it.groupValues[2] } +
             // Standalone patches that use recordControl directly instead of controlPatch:
             sequenceOf("material_you" to "Material You theme", "anonymous_stories" to "View stories anonymously",

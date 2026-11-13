@@ -67,6 +67,49 @@ class ControlsTest {
         })
     }
 
+    private fun messenger581ApplicationOnCreate(
+        flags: Int = AccessFlags.PUBLIC.value,
+        name: String = "onCreate",
+        parameters: List<String> = emptyList(),
+        returnType: String = "V",
+    ) = MutableMethod(ImmutableMethod(
+        "Lcom/facebook/messenger/app/MessengerApplication;",
+        name,
+        parameters.map { ImmutableMethodParameter(it, null, null) },
+        returnType,
+        flags,
+        null,
+        null,
+        ImmutableMethodImplementation(3, emptyList(), null, null),
+    )).apply {
+        addInstructionsWithLabels(0, if (returnType == "V") "return-void" else "const/4 v0, 0x0\nreturn v0")
+    }
+
+    @Test fun messenger581ApplicationInitializesSettingsInEveryProcess() {
+        val app = messenger581ApplicationOnCreate()
+        app.injectMessenger581ApplicationInitialization()
+        val code = app.implementation!!.instructions
+        assertEquals(Opcode.INVOKE_STATIC, code.first().opcode)
+        assertEquals(
+            "$SETTINGS->initialize(Landroid/content/Context;)V",
+            (code.first() as ReferenceInstruction).reference.toString(),
+        )
+        assertEquals(Opcode.RETURN_VOID, code.last().opcode)
+    }
+
+    @Test fun changedMessenger581ApplicationInitializerFailsBeforeEditing() {
+        for (changed in listOf(
+            messenger581ApplicationOnCreate(flags = AccessFlags.PUBLIC.value or AccessFlags.STATIC.value),
+            messenger581ApplicationOnCreate(name = "onStart"),
+            messenger581ApplicationOnCreate(parameters = listOf("Landroid/os/Bundle;")),
+            messenger581ApplicationOnCreate(returnType = "Z"),
+        )) {
+            val before = changed.implementation!!.instructions.toList()
+            assertFailsWith<PatchException> { changed.injectMessenger581ApplicationInitialization() }
+            assertEquals(before, changed.implementation!!.instructions.toList())
+        }
+    }
+
     @Test fun notificationFallbackCopiesTheNotificationThenKeepsTheStockNotifyCall() {
         val post = MutableMethod(ImmutableMethod(
             "Lfixture/Notifications;", "post", emptyList(),
@@ -102,34 +145,36 @@ class ControlsTest {
             null,
             ImmutableMethodImplementation(5, emptyList(), null, null),
         ))
-        val body = listOf("const/4 v0, 0x0", "const/4 v0, 0x0", "const/4 v0, 0x0") +
-            "invoke-super {p0, p1, p2}, Lcom/facebook/mig/bottomsheet/MigBottomSheetDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V" +
-            List(49) { "nop" } + "return-void"
-        method.addInstructionsWithLabels(0, body.joinToString("\n"))
+        val body = """
+            invoke-static {v3}, LX/33S;->A0j(Ljava/lang/Object;)V
+            invoke-super {v2, v3, v4}, Lcom/facebook/mig/bottomsheet/MigBottomSheetDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V
+            nop
+            return-void
+        """.trimIndent()
+        method.addInstructionsWithLabels(0, body)
         return method
     }
 
     @Test fun sendMusicButtonHooksOnlyAfterTheNativeRecordingSheetIsInitialized() {
         val method = sendMusicFixture()
-        assertEquals(4, method.validateSendMusic())
+        assertEquals(2, method.validateSendMusic())
         method.injectSendMusic()
         val code = method.implementation!!.instructions
-        assertEquals(Opcode.INVOKE_STATIC_RANGE, code[4].opcode)
+        assertEquals(Opcode.INVOKE_STATIC_RANGE, code[2].opcode)
         assertEquals(
-            "$SETTINGS->addSendMusicButton(Landroid/view/View;)V",
-            (code[4] as ReferenceInstruction).reference.toString(),
+            "Lapp/hushmessenger/extension/AudioPickerBridge;->install(Ljava/lang/Object;)V",
+            (code[2] as ReferenceInstruction).reference.toString(),
         )
-        assertEquals(55, code.size)
+        assertEquals(5, code.size)
     }
 
     @Test fun changedSendMusicSheetContractFailsBeforeEditing() {
         val method = sendMusicFixture()
-        val original = method.implementation!!.instructions.toList()
-        method.replaceInstruction(3, "invoke-super {p0, p2, p1}, Lcom/facebook/mig/bottomsheet/MigBottomSheetDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V")
+        method.addInstructionsWithLabels(0, "nop")
         val changed = method.implementation!!.instructions.toList()
         assertFailsWith<PatchException> { method.injectSendMusic() }
         assertEquals(changed, method.implementation!!.instructions.toList())
-        assertEquals(54, original.size)
+        assertEquals(5, changed.size)
     }
 
     @Test fun missingOrAmbiguousAnchorsRejectTheApk() {

@@ -43,6 +43,25 @@ public class SettingsTest {
         assertTrue(Settings.hideMetaAiTab());
     }
 
+    @Test public void secondaryProcessProviderExposesOnlyTheCurrentKeepUnsentState() {
+        HostScreens.failed = false;
+        Settings.installed = java.util.Set.of("keep_unsent");
+        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
+        Bundle enabled = new SettingsProvider().call(
+            SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
+        assertTrue(enabled.getBoolean("enabled"));
+
+        Settings.preferences.edit().putBoolean("paused", true).commit();
+        Bundle paused = new SettingsProvider().call(
+            SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
+        assertFalse(paused.getBoolean("enabled"));
+
+        Settings.preferences.edit().putBoolean("paused", false).putBoolean("safe_mode", true).commit();
+        Bundle safeMode = new SettingsProvider().call(
+            SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
+        assertFalse(safeMode.getBoolean("enabled"));
+    }
+
     @Test public void allControlsPreserveStockUntilEnabled() {
         assertFalse(Settings.hideStories());
         assertFalse(Settings.hideFacebook());
@@ -124,6 +143,32 @@ public class SettingsTest {
         assertEquals(java.util.Set.of("e2ee-a", "e2ee-b"),
             Settings.preferences.getStringSet("kept_unsent_ids", java.util.Set.of()));
         assertEquals(2, AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listUnsent(10).size());
+    }
+
+    private static final class MissingMetadataDownloader {
+        private final Object A07 = null;
+        private final String privateValue = "must-never-appear-in-debug";
+    }
+
+    private static final class CompletedImageResult {
+        private final Uri A00 = Uri.parse("file:///tmp/hush-test-image.jpg");
+        private final Object A01 = null;
+    }
+
+    @Test @Config(sdk = {28, 36}) public void missingMediaMetadataIsDiagnosedWithoutSerializingFieldValues() throws Exception {
+        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
+        Settings.captureDownloadedImageFromCallback(
+            new MissingMetadataDownloader(), new CompletedImageResult());
+
+        String report = UnsentDiagnostics.report(RuntimeEnvironment.getApplication());
+        assertTrue(report.contains("metadata_container_missing"));
+        assertFalse(report.contains("must-never-appear-in-debug"));
+
+        java.lang.reflect.Method shape = Settings.class.getDeclaredMethod("safeObjectShape", Object.class);
+        shape.setAccessible(true);
+        String summary = (String) shape.invoke(null, new MissingMetadataDownloader());
+        assertTrue(summary.contains("privateValue"));
+        assertFalse(summary.contains("must-never-appear-in-debug"));
     }
 
     @Test @Config(sdk = {28, 36}) public void retainedUnsendChoiceSurvivesRestartWithoutChangingStockUnsend() {

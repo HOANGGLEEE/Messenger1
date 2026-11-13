@@ -326,15 +326,20 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         first.put("unsent_at", now);
         long inserted = db.insertWithOnConflict("messages", null, first, SQLiteDatabase.CONFLICT_IGNORE);
         if (inserted == -1) {
-            ContentValues values = new ContentValues();
-            values.put("last_seen_at", now);
-            values.put("unsent_at", now);
-            db.update("messages", values, "message_id=?", new String[] {messageId});
+            ContentValues seen = new ContentValues();
+            seen.put("last_seen_at", now);
+            db.update("messages", seen, "message_id=?", new String[] {messageId});
+            // Duplicate or out-of-order revoke callbacks must not move the original unsent time forward.
+            db.execSQL("UPDATE messages SET unsent_at=CASE " +
+                "WHEN unsent_at IS NULL OR unsent_at=0 OR unsent_at>? THEN ? ELSE unsent_at END " +
+                "WHERE message_id=?", new Object[] {now, now, messageId});
         }
-        ContentValues mediaUnsent = new ContentValues();
-        mediaUnsent.put("unsent_at", now);
-        mediaUnsent.put("last_seen_at", now);
-        db.update("media", mediaUnsent, "message_id=?", new String[] {messageId});
+        ContentValues mediaSeen = new ContentValues();
+        mediaSeen.put("last_seen_at", now);
+        db.update("media", mediaSeen, "message_id=?", new String[] {messageId});
+        db.execSQL("UPDATE media SET unsent_at=CASE " +
+            "WHEN unsent_at IS NULL OR unsent_at=0 OR unsent_at>? THEN ? ELSE unsent_at END " +
+            "WHERE message_id=?", new Object[] {now, now, messageId});
         pruneOccasionally(db, now);
     }
 

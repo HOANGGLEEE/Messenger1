@@ -39,7 +39,7 @@ import java.lang.ref.WeakReference;
  */
 public final class AudioPickerActivity extends Activity {
     private static final int REQUEST_OPEN_AUDIO = 7104;
-    private static volatile WeakReference<Object> pendingSender = new WeakReference<>(null);
+    private static volatile WeakReference<Object> pendingFragment = new WeakReference<>(null);
 
     private MediaPlayer previewPlayer;
     private AlertDialog confirmDialog;
@@ -56,9 +56,9 @@ public final class AudioPickerActivity extends Activity {
     private static final String WAVEFORM_DATA = "com.facebook.xapp.messaging.threadview.model.audio.WaveformData";
     private static final String IMMUTABLE_LIST = "com.google.common.collect.ImmutableList";
 
-    public static void launch(Activity host, Object voiceMessageSender) {
-        if (host == null || voiceMessageSender == null) return;
-        pendingSender = new WeakReference<>(voiceMessageSender);
+    public static void launch(Activity host, Object recordingFragment) {
+        if (host == null || recordingFragment == null) return;
+        pendingFragment = new WeakReference<>(recordingFragment);
         Intent intent = new Intent(host, AudioPickerActivity.class);
         host.startActivity(intent);
     }
@@ -196,15 +196,15 @@ public final class AudioPickerActivity extends Activity {
     }
 
     private void beginSend(Uri uri, long durationMs) {
-        final Object sender = pendingSender.get();
-        if (sender == null) {
+        final Object recordingFragment = pendingFragment.get();
+        if (recordingFragment == null) {
             Toast.makeText(this, "Phiên gửi âm thanh đã hết. Hãy mở lại bảng ghi âm.", Toast.LENGTH_LONG).show();
             clearSender();
             finish();
             return;
         }
         if (sendButton != null) sendButton.setEnabled(false);
-        statusView.setText("Đang chuẩn bị sóng âm và chuyển cho Messenger...");
+        statusView.setText("Đang chuẩn bị sóng âm và chuyển cho bộ gửi tin nhắn thoại...");
         stopPreview();
 
         Thread worker = new Thread(() -> {
@@ -215,8 +215,8 @@ public final class AudioPickerActivity extends Activity {
                 Object resource = createNativeMediaResource(uri, actualDuration, waveform);
                 runOnUiThread(() -> {
                     try {
-                        sendThroughMessenger(sender, resource);
-                        Toast.makeText(this, "Đã chuyển tin nhắn âm thanh cho Messenger.", Toast.LENGTH_LONG).show();
+                        sendThroughMessenger(recordingFragment, resource);
+                        Toast.makeText(this, "Đã chuyển âm thanh cho bộ gửi tin nhắn thoại của Messenger.", Toast.LENGTH_LONG).show();
                         clearSender();
                         if (confirmDialog != null) confirmDialog.dismiss();
                         finish();
@@ -285,18 +285,35 @@ public final class AudioPickerActivity extends Activity {
         return resourceConstructor.newInstance(builder);
     }
 
-    private static void sendThroughMessenger(Object sender, Object mediaResource) throws Exception {
-        Class<?> senderClass = Class.forName("LX.V3J");
-        if (!senderClass.isInstance(sender)) throw new IllegalStateException("The voice-message sender is unavailable.");
+    /**
+     * Uses the Xapp voice composer that is actually opened by Messenger 581. Its BaseRecording
+     * fragment owns the V0H state holder; A04 installs the MediaResource and A1x runs Messenger's
+     * normal upload/send pipeline, including its native waveform bubble and delivery handling.
+     */
+    static void sendThroughMessenger(Object recordingFragment, Object mediaResource) throws Exception {
+        Class<?> baseClass = Class.forName(
+            "com.facebook.xapp.messaging.composer.audio.recordcontrols.fragments.BaseRecordingControlsDialogFragment");
+        if (recordingFragment == null || !baseClass.isInstance(recordingFragment)) {
+            throw new IllegalStateException("The Messenger 581 voice composer is no longer available.");
+        }
         Class<?> resourceClass = Class.forName(MEDIA_RESOURCE);
-        Method send = senderClass.getDeclaredMethod("A02", senderClass, resourceClass);
+        Method stateAccessor = baseClass.getDeclaredMethod("A1u");
+        stateAccessor.setAccessible(true);
+        Object state = stateAccessor.invoke(recordingFragment);
+        if (state == null) throw new IllegalStateException("Messenger's audio state holder is unavailable.");
+
+        Method setResource = state.getClass().getDeclaredMethod("A04", resourceClass);
+        setResource.setAccessible(true);
+        setResource.invoke(state, mediaResource);
+
+        Method send = recordingFragment.getClass().getDeclaredMethod("A1x");
         send.setAccessible(true);
         try {
-            send.invoke(null, sender, mediaResource);
+            send.invoke(recordingFragment);
         } catch (InvocationTargetException error) {
             Throwable cause = error.getCause();
             if (cause instanceof Exception) throw (Exception) cause;
-            throw new IllegalStateException("Messenger rejected the audio resource.", cause);
+            throw new IllegalStateException("Messenger rejected the voice-message resource.", cause);
         }
     }
 
@@ -562,7 +579,7 @@ public final class AudioPickerActivity extends Activity {
     }
 
     private void clearSender() {
-        pendingSender = new WeakReference<>(null);
+        pendingFragment = new WeakReference<>(null);
     }
 
     @Override

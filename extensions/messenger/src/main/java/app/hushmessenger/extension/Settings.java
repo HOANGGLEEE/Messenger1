@@ -1,5 +1,6 @@
 package app.hushmessenger.extension;
 
+import android.app.Application;
 import android.app.Notification;
 import android.app.Person;
 import android.content.Context;
@@ -53,7 +54,10 @@ public final class Settings {
         features.addAll(bundled(HostScreens.bundledControls()));
         installed = Collections.unmodifiableSet(features);
         // Set last: a hook that sees preferences also sees the installed controls.
-        preferences = appContext.getSharedPreferences("hushmessenger", Context.MODE_PRIVATE);
+        // MODE_MULTI_PROCESS is a best-effort fallback for Root Mount builds without the main-process provider.
+        preferences = appContext.getSharedPreferences("hushmessenger", Context.MODE_PRIVATE | Context.MODE_MULTI_PROCESS);
+        UnsentDiagnostics.record(appContext, "runtime.initialize", "ok");
+        UnsentDiagnostics.record(appContext, "feature.keep_unsent", installed.contains("keep_unsent") ? "installed" : "not_installed");
     }
 
     static Set<String> bundled(String list) {
@@ -72,9 +76,45 @@ public final class Settings {
     static boolean wouldUse(String key) {
         if (!HostScreens.started) HostScreens.initializeLate();
         if (HostScreens.failed) return false;
+        if ("keep_unsent".equals(key)) {
+            Boolean mainProcessState = mainProcessKeepUnsentEnabled();
+            if (mainProcessState != null) return mainProcessState;
+        }
+        return locallyWouldUse(key);
+    }
+
+    /** Main-process view used by the private provider when a secondary Messenger process asks. */
+    static boolean keepUnsentEnabledLocally() {
+        return locallyWouldUse("keep_unsent");
+    }
+
+    private static boolean locallyWouldUse(String key) {
         SharedPreferences prefs = preferences;
-        return installed.contains(key) && prefs != null && !prefs.getBoolean("paused", false)
-                && !CrashGuard.isSafeMode() && prefs.getBoolean(key, false);
+        return !HostScreens.failed && installed.contains(key) && prefs != null
+                && !prefs.getBoolean("paused", false)
+                && !prefs.getBoolean("safe_mode", false)
+                && !CrashGuard.isSafeMode()
+                && prefs.getBoolean(key, false);
+    }
+
+    /**
+     * Messenger 581 receives encrypted messages in :background_e2ee. SharedPreferences are cached
+     * per process, so ask the private main-process provider for the current switch state. Root Mount
+     * installs may not expose the provider; in that case the process-local snapshot is the fallback.
+     */
+    private static Boolean mainProcessKeepUnsentEnabled() {
+        Context context = appContext;
+        if (context == null) return null;
+        String processName = Application.getProcessName();
+        if (processName == null || processName.equals(context.getPackageName())) return null;
+        try {
+            Bundle state = context.getContentResolver().call(
+                Uri.parse("content://" + context.getPackageName() + ".hush.settings"),
+                SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
+            return state == null || !state.containsKey("enabled") ? null : state.getBoolean("enabled", false);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
     }
 
     public static long lastActive(String key) {
@@ -149,103 +189,6 @@ public final class Settings {
         return errors;
     }
 
-    /** Adds a file picker action to Messenger's native voice-message sheet when Send music is enabled. */
-    public static void addSendMusicButton(android.view.View root) {
-        if (root == null || !enabled("send_music")) return;
-        try {
-            android.view.ViewGroup container = findMusicContainer(root);
-            if (container == null || hasMusicButton(container)) return;
-
-            android.content.Context context = root.getContext();
-            android.widget.Button button = new android.widget.Button(context);
-            button.setText("♫  Gửi nhạc");
-            button.setAllCaps(false);
-            button.setTextSize(14);
-            button.setTextColor(android.graphics.Color.WHITE);
-            button.setContentDescription("Chọn tệp âm thanh để gửi trong Messenger");
-            button.setPadding(dp(context, 20), dp(context, 8), dp(context, 20), dp(context, 8));
-            button.setMinHeight(dp(context, 44));
-            button.setElevation(dp(context, 8));
-            android.graphics.drawable.GradientDrawable background = new android.graphics.drawable.GradientDrawable();
-            background.setColor(0xFF0866FF);
-            background.setCornerRadius(dp(context, 24));
-            button.setBackground(background);
-            button.setTag("hush_send_music_button");
-            button.setOnClickListener(view -> {
-                try {
-                    android.content.Intent intent = new android.content.Intent(context, MusicShareActivity.class);
-                    if (!(context instanceof android.app.Activity)) {
-                        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
-                    }
-                    context.startActivity(intent);
-                } catch (RuntimeException error) {
-                    hookFailedPrivately("send_music", "Can't open the music picker", error);
-                    try {
-                        android.widget.Toast.makeText(context, "Không thể mở trình chọn nhạc.", android.widget.Toast.LENGTH_LONG).show();
-                    } catch (RuntimeException ignored) {}
-                }
-            });
-
-            if (container instanceof android.widget.FrameLayout) {
-                android.widget.FrameLayout.LayoutParams params = new android.widget.FrameLayout.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
-                    android.view.Gravity.BOTTOM | android.view.Gravity.CENTER_HORIZONTAL
-                );
-                params.bottomMargin = dp(context, 14);
-                container.addView(button, params);
-            } else if (container instanceof android.widget.LinearLayout) {
-                android.widget.LinearLayout.LayoutParams params = new android.widget.LinearLayout.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-                );
-                params.setMargins(dp(context, 12), dp(context, 8), dp(context, 12), dp(context, 12));
-                container.addView(button, params);
-            } else {
-                container.addView(button, new android.view.ViewGroup.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-                ));
-            }
-        } catch (RuntimeException | LinkageError error) {
-            hookFailedPrivately("send_music", "Can't add the music picker to the recording sheet", error);
-        }
-    }
-
-    private static int dp(android.content.Context context, int value) {
-        return Math.round(value * context.getResources().getDisplayMetrics().density);
-    }
-
-    private static android.view.ViewGroup findMusicContainer(android.view.View root) {
-        if (root instanceof android.widget.FrameLayout) return (android.view.ViewGroup) root;
-        if (root instanceof android.widget.LinearLayout &&
-                ((android.widget.LinearLayout) root).getOrientation() == android.widget.LinearLayout.VERTICAL) {
-            return (android.view.ViewGroup) root;
-        }
-        if (!(root instanceof android.view.ViewGroup)) return null;
-        android.view.ViewGroup group = (android.view.ViewGroup) root;
-        for (int i = 0; i < group.getChildCount(); i++) {
-            android.view.View child = group.getChildAt(i);
-            if (child instanceof android.widget.FrameLayout) return (android.view.ViewGroup) child;
-        }
-        for (int i = 0; i < group.getChildCount(); i++) {
-            android.view.View found = findMusicContainer(group.getChildAt(i));
-            if (found instanceof android.view.ViewGroup) return (android.view.ViewGroup) found;
-        }
-        if (root instanceof android.widget.LinearLayout &&
-                ((android.widget.LinearLayout) root).getOrientation() == android.widget.LinearLayout.VERTICAL) return group;
-        return null;
-    }
-
-    private static boolean hasMusicButton(android.view.View view) {
-        if ("hush_send_music_button".equals(view.getTag())) return true;
-        if (view instanceof android.view.ViewGroup) {
-            android.view.ViewGroup group = (android.view.ViewGroup) view;
-            for (int i = 0; i < group.getChildCount(); i++) if (hasMusicButton(group.getChildAt(i))) return true;
-        }
-        return false;
-    }
-
     public static boolean hideStories() { return enabled("stories"); }
     public static boolean hideFacebook() { return enabled("facebook"); }
     public static boolean hideMetaAi() { return enabled("meta_ai"); }
@@ -303,6 +246,9 @@ public final class Settings {
     }
     public static boolean hideReadReceipts() { return enabled("hide_read_receipts"); }
     public static boolean keepUnsent() { return wouldUse("keep_unsent"); }
+    public static void noteUnsentIntentHook(boolean active) {
+        UnsentDiagnostics.record(appContext, "hook.intent", active ? "enabled" : "disabled");
+    }
     public static boolean viewStoriesAnonymously() { return enabled("anonymous_stories"); }
     public static boolean saveAnyStory() { return enabled("save_stories"); }
 
@@ -398,7 +344,12 @@ public final class Settings {
 
     /** Counts entry into Messenger 581's protobuf parser, before its success/fallback branches. */
     public static void noteMessageModelParserEntry() {
-        if (wouldUse("keep_unsent")) incrementUnsentCounter(UNSENT_MODEL_PARSER_ENTRIES);
+        UnsentDiagnostics.record(appContext, "parser.entry", "entered");
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "parser.skip", "disabled");
+            return;
+        }
+        incrementUnsentCounter(UNSENT_MODEL_PARSER_ENTRIES);
     }
 
     static long unsentModelParserEntries() {
@@ -506,13 +457,24 @@ public final class Settings {
      * bundles do not reliably expose Messenger message IDs, so these rows are never marked unsent.
      */
     public static void captureNotification(Notification notification) {
-        if (notification == null || !wouldUse("keep_unsent")) return;
+        UnsentDiagnostics.record(appContext, "notification.callback", notification == null ? "null" : "entered");
+        if (notification == null) return;
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "notification.skip", "disabled");
+            return;
+        }
         incrementUnsentCounter(UNSENT_NOTIFICATION_HITS);
         Context context = appContext;
-        if (context == null) return;
+        if (context == null) {
+            UnsentDiagnostics.record(appContext, "notification.skip", "no_context");
+            return;
+        }
         try {
             Bundle extras = notification.extras;
-            if (extras == null) return;
+            if (extras == null) {
+                UnsentDiagnostics.record(appContext, "notification.skip", "no_extras");
+                return;
+            }
             String title = notificationText(extras,
                 "android.conversationTitle", "android.title.big", "android.title",
                 "android.hiddenConversationTitle");
@@ -534,7 +496,10 @@ public final class Settings {
                         store.captureNotification(title, body, fallbackTime)) saved = 1;
             }
             for (int i = 0; i < saved; i++) incrementUnsentCounter(UNSENT_NOTIFICATION_SAVED);
+            UnsentDiagnostics.record(appContext, "notification.save", saved > 0 ? "saved" : "not_saved");
+            if (saved == 0) UnsentDiagnostics.record(appContext, "notification.skip", "no_payload");
         } catch (RuntimeException error) {
+            UnsentDiagnostics.record(appContext, "notification.save", "db_error");
             hookFailedPrivately("keep_unsent", "Can't cache notification text", error);
         }
     }
@@ -546,20 +511,32 @@ public final class Settings {
      */
     public static void captureIncomingMessage(String messageId, String threadId, String senderId,
             String text, long messageTimestamp) {
-        if (messageId == null || messageId.isEmpty() || !wouldUse("keep_unsent")) return;
+        UnsentDiagnostics.record(appContext, "capture.callback", "entered");
+        if (messageId == null || messageId.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "capture.skip", "missing_id");
+            return;
+        }
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "capture.skip", "disabled");
+            return;
+        }
         incrementUnsentCounter(UNSENT_CAPTURE_HITS);
         Context context = appContext;
-        if (context == null) return;
+        if (context == null) {
+            UnsentDiagnostics.record(appContext, "capture.save", "no_context");
+            return;
+        }
         try {
             AntiUnsendStore store = AntiUnsendStore.get(context);
             long now = System.currentTimeMillis();
-            // Keep an ID/thread/timestamp row even for photo-only messages with no text body.
             store.captureMessageMetadata(messageId, threadId, senderId, messageTimestamp, now);
             if (text != null && !text.isEmpty()) {
                 store.captureText(messageId, threadId, senderId, text, messageTimestamp, now);
             }
             incrementUnsentCounter(UNSENT_CAPTURE_SAVED);
+            UnsentDiagnostics.record(appContext, "capture.save", "ok");
         } catch (RuntimeException error) {
+            UnsentDiagnostics.record(appContext, "capture.save", "db_error");
             hookFailedPrivately("keep_unsent", "Can't cache incoming message metadata", error);
         }
     }
@@ -632,98 +609,152 @@ public final class Settings {
      * Snapshot the verified Messenger 581 message-model object without changing Messenger's own
      * state. The model exposes message_id/thread_key/is_unsent and its nested image metadata.
      */
+    public static void noteMessenger581MaterializerEntry() {
+        UnsentDiagnostics.record(appContext, "materializer.entry", "entered");
+    }
+
     public static void captureIncomingQpl(Object qpl) {
-        if (!wouldUse("keep_unsent")) return;
+        UnsentDiagnostics.record(appContext, "model.callback", "entered");
+        UnsentDiagnostics.recordObjectShape(appContext, "qpl", safeObjectShape(qpl));
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "model.skip", "disabled");
+            return;
+        }
         incrementUnsentCounter(UNSENT_MODEL_HOOK_HITS);
-        if (qpl == null) return;
+        if (qpl == null) {
+            UnsentDiagnostics.record(appContext, "model.skip", "null");
+            return;
+        }
         String messageId = messageModelString(qpl, "A0I");
         if (messageId == null || messageId.isEmpty()) {
             incrementUnsentCounter(UNSENT_MODEL_ID_MISSING);
+            UnsentDiagnostics.record(appContext, "model.skip", "missing_id");
             return;
         }
         String threadKey = messageModelString(qpl, "A0L");
         String senderId = messageModelString(qpl, "A0K");
         long messageTimestamp = messageModelLong(qpl, "A0M");
-
         Object content = invokeModelGetter(qpl, "A0B");
+        UnsentDiagnostics.recordObjectShape(appContext, "content", safeObjectShape(content));
         Object messageContent = invokeModelGetter(content, "A01");
+        UnsentDiagnostics.recordObjectShape(appContext, "message_content", safeObjectShape(messageContent));
         Object textValue = readMessageModelValue(messageContent, "BOa", MESSAGE_MODEL_TEXT);
         String body = textValue instanceof String ? (String) textValue : null;
         captureIncomingMessage(messageId, threadKey, senderId, body, messageTimestamp);
 
         Context context = appContext;
+        int linkedImages = 0;
         if (context != null && messageContent != null) {
             try {
                 Object imageContainer = invokeModelGetter(messageContent, "A03");
+                UnsentDiagnostics.recordObjectShape(appContext, "image_container", safeObjectShape(imageContainer));
                 Object imageRows = invokeModelGetter(imageContainer, "A00");
                 if (imageRows instanceof Iterable<?>) {
                     AntiUnsendStore store = AntiUnsendStore.get(context);
                     long now = System.currentTimeMillis();
                     for (Object image : (Iterable<?>) imageRows) {
-                        String directPath = (String) readMessageModelValue(
-                            image, "BOa", MESSAGE_MODEL_DIRECT_PATH);
-                        String mimeType = (String) readMessageModelValue(
-                            image, "BOa", MESSAGE_MODEL_DIRECT_PATH_MIME);
-                        Object rawTimestamp = readMessageModelValue(
-                            image, "Akr", MESSAGE_MODEL_MEDIA_KEY_TIMESTAMP);
+                        UnsentDiagnostics.recordObjectShape(appContext, "image_item", safeObjectShape(image));
+                        Object rawDirectPath = readMessageModelValue(image, "BOa", MESSAGE_MODEL_DIRECT_PATH);
+                        Object rawMimeType = readMessageModelValue(image, "BOa", MESSAGE_MODEL_DIRECT_PATH_MIME);
+                        Object rawTimestamp = readMessageModelValue(image, "Akr", MESSAGE_MODEL_MEDIA_KEY_TIMESTAMP);
+                        if (!(rawDirectPath instanceof String) || ((String) rawDirectPath).isEmpty() ||
+                                !(rawMimeType instanceof String) ||
+                                !((String) rawMimeType).toLowerCase(java.util.Locale.ROOT).startsWith("image/")) {
+                            UnsentDiagnostics.record(appContext, "model.skip", "metadata_type_mismatch");
+                            continue;
+                        }
                         long mediaKeyTimestamp = rawTimestamp instanceof Number
                             ? ((Number) rawTimestamp).longValue() : 0;
-                        if (directPath == null || directPath.isEmpty() || mimeType == null ||
-                                !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) continue;
-                        store.captureMediaMetadataForMessage(directPath, messageId, threadKey,
-                            mediaKeyTimestamp, mimeType, now);
+                        store.captureMediaMetadataForMessage((String) rawDirectPath, messageId, threadKey,
+                            mediaKeyTimestamp, (String) rawMimeType, now);
+                        linkedImages++;
                     }
                 }
             } catch (Exception error) {
+                UnsentDiagnostics.record(appContext, "model.skip", "db_error");
                 hookFailedPrivately("keep_unsent", "Can't link image metadata to the message", error);
             }
+        } else {
+            UnsentDiagnostics.record(appContext, "model.skip", "no_context");
         }
-
+        UnsentDiagnostics.record(appContext, "model.media_metadata", linkedImages > 0 ? "linked" : "no_images");
         Object unsentValue = readMessageModelValue(qpl, "Akp", MESSAGE_MODEL_IS_UNSENT);
+        UnsentDiagnostics.record(appContext, "model.unsent_flag", Boolean.TRUE.equals(unsentValue) ? "true" : "false");
         if (Boolean.TRUE.equals(unsentValue) && !isKeptUnsent(messageId)) {
             Object rawUnsentAt = readMessageModelValue(qpl, "Akr", MESSAGE_MODEL_UNSENT_TIMESTAMP);
             long unsentAt = rawUnsentAt instanceof Number ? ((Number) rawUnsentAt).longValue() : 0;
             recordUnsent(messageId, unsentAt);
         }
+        UnsentDiagnostics.record(appContext, "model.callback", "ok");
     }
 
     /**
      * Messenger 581 download callback: p0 is SUm (metadata in A07), p1 is the result object.
-     * Its Uri is used only to confirm success; the filesystem File is resolved through the same
-     * A0F(directPath) helper Messenger itself uses in this callback.
+     * Its Uri supplies the completed local path; Messenger resolves the filesystem File through
+     * A0F(localPath). The metadata directPath is a separate stable key for matching the image to its message.
      */
     public static void captureDownloadedImageFromCallback(Object downloader, Object result) {
-        if (!wouldUse("keep_unsent")) return;
+        UnsentDiagnostics.record(appContext, "media.callback", "entered");
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "media.skip", "disabled");
+            return;
+        }
         incrementUnsentCounter(UNSENT_MEDIA_CALLBACK_HITS);
-        if (downloader == null || result == null) return;
+        if (downloader == null || result == null) {
+            UnsentDiagnostics.record(appContext, "media.skip", "missing_uri");
+            return;
+        }
         try {
+            Object metadata = readDeclaredField(downloader, "A07");
+            logMediaMetadataShape(downloader, result, metadata);
             Object resultUri = readDeclaredField(result, "A00");
             Object resultError = readDeclaredField(result, "A01");
-            if (!(resultUri instanceof Uri) || resultError != null) return;
-
-            // Messenger's own callback resolves the completed local file from resultUri.getPath().
-            // The metadata directPath is an archive key, not the local filesystem path.
+            if (!(resultUri instanceof Uri) || resultError != null) {
+                UnsentDiagnostics.record(appContext, "media.skip", resultError != null ? "failed" : "missing_uri");
+                return;
+            }
             String localPath = ((Uri) resultUri).getPath();
-            if (localPath == null || localPath.isEmpty()) return;
-
-            Object metadata = readDeclaredField(downloader, "A07");
-            if (metadata == null) return;
-            Object directPath = readDeclaredField(metadata, "A07");
+            if (localPath == null || localPath.isEmpty()) {
+                UnsentDiagnostics.record(appContext, "media.skip", "missing_file");
+                return;
+            }
+            if (metadata == null) {
+                UnsentDiagnostics.record(appContext, "media.skip", "metadata_container_missing");
+                return;
+            }
+            // Messenger 581 maps client__e2ee_direct_path through Q1b.A06 -> RTh.A01 -> LX/8uu.A05.
+            // A07 is a different optional String field and is null on the tested image downloads.
+            Object directPath = readDeclaredField(metadata, "A05");
             Object mime = readDeclaredField(metadata, "A06");
             Object timestamp = readDeclaredField(metadata, "A03");
-            if (!(directPath instanceof String) || !(mime instanceof String) ||
-                    !(timestamp instanceof Number)) return;
-
+            if (!(directPath instanceof String) || ((String) directPath).isEmpty()) {
+                UnsentDiagnostics.record(appContext, "media.skip",
+                    directPath == null ? "direct_path_missing" : "metadata_type_mismatch");
+                return;
+            }
+            if (!(mime instanceof String) || ((String) mime).isEmpty()) {
+                UnsentDiagnostics.record(appContext, "media.skip",
+                    mime == null ? "mime_missing" : "metadata_type_mismatch");
+                return;
+            }
+            if (!(timestamp instanceof Number)) {
+                UnsentDiagnostics.record(appContext, "media.skip",
+                    timestamp == null ? "timestamp_missing" : "metadata_type_mismatch");
+                return;
+            }
             ClassLoader loader = downloader.getClass().getClassLoader();
             Class<?> fileHelper = Class.forName("X.001", false, loader);
             java.lang.reflect.Method resolver = fileHelper.getDeclaredMethod("A0F", String.class);
             resolver.setAccessible(true);
             Object resolvedFile = resolver.invoke(null, localPath);
-            if (!(resolvedFile instanceof File)) return;
-
+            if (!(resolvedFile instanceof File)) {
+                UnsentDiagnostics.record(appContext, "media.skip", "missing_file");
+                return;
+            }
             captureDownloadedImage((String) directPath, (String) mime,
                 ((Number) timestamp).longValue(), ((File) resolvedFile).getAbsolutePath());
         } catch (Exception error) {
+            UnsentDiagnostics.record(appContext, "media.save", "db_error");
             hookFailedPrivately("keep_unsent", "Can't inspect completed image download", error);
         }
     }
@@ -742,29 +773,94 @@ public final class Settings {
         return null;
     }
 
+    /**
+     * Privacy-safe reflection summary for runtime diagnostics. It reports class/field/type
+     * names and whether a field is null, but never serializes field values, IDs, URLs or text.
+     */
+    private static String safeObjectShape(Object instance) {
+        if (instance == null) return "null";
+        StringBuilder out = new StringBuilder(instance.getClass().getName());
+        int shown = 0;
+        Class<?> owner = instance.getClass();
+        while (owner != null && owner != Object.class && shown < 24) {
+            for (java.lang.reflect.Field field : owner.getDeclaredFields()) {
+                if (java.lang.reflect.Modifier.isStatic(field.getModifiers()) || shown >= 24) continue;
+                String state = "unreadable";
+                try {
+                    field.setAccessible(true);
+                    state = field.get(instance) == null ? "null" : "set";
+                } catch (Throwable ignored) { }
+                out.append(shown == 0 ? "[" : ",")
+                    .append(field.getName()).append(":")
+                    .append(field.getType().getName()).append("=")
+                    .append(state);
+                shown++;
+            }
+            owner = owner.getSuperclass();
+        }
+        if (shown > 0) out.append("]");
+        if (shown == 24) out.append("…");
+        return out.toString();
+    }
+
+    private static void logMediaMetadataShape(Object downloader, Object result, Object metadata) {
+        // Keep only class/field/type/null-state information in the report; never field values.
+        UnsentDiagnostics.recordObjectShape(appContext, "downloader", safeObjectShape(downloader));
+        UnsentDiagnostics.recordObjectShape(appContext, "result", safeObjectShape(result));
+        if (metadata != null) {
+            UnsentDiagnostics.recordObjectShape(appContext, "metadata", safeObjectShape(metadata));
+        }
+    }
+
     public static void captureDownloadedImage(String directPath, String mimeType,
             long mediaKeyTimestamp, String sourcePath) {
-        if (!wouldUse("keep_unsent") || directPath == null || directPath.isEmpty() ||
-                mimeType == null || !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/") ||
-                sourcePath == null || sourcePath.isEmpty()) return;
+        UnsentDiagnostics.record(appContext, "media.capture", "entered");
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "media.skip", "disabled");
+            return;
+        }
+        if (directPath == null || directPath.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "media.skip", "missing_metadata");
+            return;
+        }
+        if (mimeType == null || !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) {
+            UnsentDiagnostics.record(appContext, "media.skip", "not_image");
+            return;
+        }
+        if (sourcePath == null || sourcePath.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "media.skip", "missing_file");
+            return;
+        }
         incrementUnsentCounter(UNSENT_MEDIA_HITS);
         Context context = appContext;
-        if (context == null) return;
+        if (context == null) {
+            UnsentDiagnostics.record(appContext, "media.skip", "no_context");
+            return;
+        }
         synchronized (UNSENT_MEDIA_ARCHIVE_LOCK) {
             File temporary = null;
             try {
                 File source = new File(sourcePath);
                 long sourceLength = source.length();
-                if (!source.isFile() || !source.canRead() || sourceLength <= 0 ||
-                        sourceLength > MAX_UNSENT_IMAGE_BYTES) return;
-                if (!hasImageFileSignature(source, mimeType)) return;
-
+                if (!source.isFile() || !source.canRead() || sourceLength <= 0) {
+                    UnsentDiagnostics.record(appContext, "media.skip", "unreadable");
+                    return;
+                }
+                if (sourceLength > MAX_UNSENT_IMAGE_BYTES) {
+                    UnsentDiagnostics.record(appContext, "media.skip", "too_large");
+                    return;
+                }
+                if (!hasImageFileSignature(source, mimeType)) {
+                    UnsentDiagnostics.record(appContext, "media.skip", "bad_signature");
+                    return;
+                }
                 String key = AntiUnsendStore.mediaKey(directPath, mediaKeyTimestamp);
-                if (key == null) return;
+                if (key == null) {
+                    UnsentDiagnostics.record(appContext, "media.skip", "missing_metadata");
+                    return;
+                }
                 AntiUnsendStore store = AntiUnsendStore.get(context);
-                store.captureMediaMetadata(directPath, mediaKeyTimestamp, mimeType,
-                    System.currentTimeMillis());
-
+                store.captureMediaMetadata(directPath, mediaKeyTimestamp, mimeType, System.currentTimeMillis());
                 File directory = new File(context.getFilesDir(), "hush_unsent_media");
                 if (!directory.isDirectory() && !directory.mkdirs()) {
                     throw new java.io.IOException("Can't create private media directory");
@@ -774,25 +870,20 @@ public final class Settings {
                 if (destination.isFile() && destination.length() > 0) {
                     if (hasImageFileSignature(destination, mimeType)) {
                         String destinationPath = destination.getAbsolutePath();
-                        boolean alreadyLinked = destinationPath.equals(
-                            store.mediaLocalPath(directPath, mediaKeyTimestamp));
-                        if (store.saveMediaFile(directPath, mediaKeyTimestamp,
-                                destinationPath, System.currentTimeMillis())) {
+                        boolean alreadyLinked = destinationPath.equals(store.mediaLocalPath(directPath, mediaKeyTimestamp));
+                        if (store.saveMediaFile(directPath, mediaKeyTimestamp, destinationPath, System.currentTimeMillis())) {
                             if (!alreadyLinked) incrementUnsentCounter(UNSENT_MEDIA_SAVED);
+                            UnsentDiagnostics.record(appContext, "media.save", alreadyLinked ? "duplicate" : "saved");
                         } else {
                             destination.delete();
+                            UnsentDiagnostics.record(appContext, "media.save", "not_saved");
                         }
                         return;
                     }
-                    if (!destination.delete()) {
-                        throw new java.io.IOException("Can't replace invalid archived image");
-                    }
+                    if (!destination.delete()) throw new java.io.IOException("Can't replace invalid archived image");
                 }
-
                 temporary = new File(directory, key + ".tmp");
-                if (temporary.exists() && !temporary.delete()) {
-                    throw new java.io.IOException("Can't replace temporary image");
-                }
+                if (temporary.exists() && !temporary.delete()) throw new java.io.IOException("Can't replace temporary image");
                 long copied = 0;
                 byte[] buffer = new byte[16 * 1024];
                 try (FileInputStream input = new FileInputStream(source);
@@ -800,32 +891,26 @@ public final class Settings {
                     int count;
                     while ((count = input.read(buffer)) != -1) {
                         copied += count;
-                        if (copied > MAX_UNSENT_IMAGE_BYTES) {
-                            throw new java.io.IOException("Image exceeds local archive limit");
-                        }
+                        if (copied > MAX_UNSENT_IMAGE_BYTES) throw new java.io.IOException("Image exceeds local archive limit");
                         output.write(buffer, 0, count);
                     }
                     output.flush();
                     output.getFD().sync();
                 }
-                if (copied != sourceLength || copied == 0) {
-                    throw new java.io.IOException("Downloaded image changed while being copied");
-                }
-                if (destination.exists() && !destination.delete()) {
-                    throw new java.io.IOException("Can't replace archived image");
-                }
-                if (!temporary.renameTo(destination)) {
-                    throw new java.io.IOException("Can't move image into private storage");
-                }
+                if (copied != sourceLength || copied == 0) throw new java.io.IOException("Downloaded image changed while being copied");
+                if (destination.exists() && !destination.delete()) throw new java.io.IOException("Can't replace archived image");
+                if (!temporary.renameTo(destination)) throw new java.io.IOException("Can't move image into private storage");
                 temporary = null;
-                if (!store.saveMediaFile(directPath, mediaKeyTimestamp,
-                        destination.getAbsolutePath(), System.currentTimeMillis())) {
+                if (!store.saveMediaFile(directPath, mediaKeyTimestamp, destination.getAbsolutePath(), System.currentTimeMillis())) {
                     destination.delete();
+                    UnsentDiagnostics.record(appContext, "media.save", "not_saved");
                     return;
                 }
                 incrementUnsentCounter(UNSENT_MEDIA_SAVED);
+                UnsentDiagnostics.record(appContext, "media.save", "saved");
             } catch (Exception error) {
                 if (temporary != null) temporary.delete();
+                UnsentDiagnostics.record(appContext, "media.save", "db_error");
                 hookFailedPrivately("keep_unsent", "Can't save downloaded image for local history", error);
             }
         }
@@ -900,20 +985,36 @@ public final class Settings {
     }
 
     public static synchronized void recordUnsent(String messageId, long unsentAt) {
-        if (messageId == null || messageId.isEmpty() || !wouldUse("keep_unsent")) return;
+        UnsentDiagnostics.record(appContext, "revoke.callback", "entered");
+        if (messageId == null || messageId.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "revoke.skip", "missing_id");
+            return;
+        }
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "revoke.skip", "disabled");
+            return;
+        }
         long eventTime = unsentAt > 0 ? unsentAt : System.currentTimeMillis();
         incrementUnsentCounter(UNSENT_REVOKE_HITS);
         SharedPreferences prefs = preferences;
-        if (prefs == null) return;
+        if (prefs == null) {
+            UnsentDiagnostics.record(appContext, "revoke.skip", "no_preferences");
+            return;
+        }
         Set<String> ids = new HashSet<>(prefs.getStringSet(KEPT_UNSENT_KEY, Collections.emptySet()));
         if (ids.add(messageId)) prefs.edit().putStringSet(KEPT_UNSENT_KEY, ids).apply();
         Context context = appContext;
-        if (context != null) try {
-            AntiUnsendStore.get(context).markUnsent(messageId, eventTime);
-            incrementUnsentCounter(UNSENT_REVOKE_SAVED);
-        } catch (RuntimeException error) {
-            // The legacy SharedPreferences marker remains the fallback; database failure must never crash Messenger.
-            hookFailedPrivately("keep_unsent", "Can't record unsent message history", error);
+        if (context != null) {
+            try {
+                AntiUnsendStore.get(context).markUnsent(messageId, eventTime);
+                incrementUnsentCounter(UNSENT_REVOKE_SAVED);
+                UnsentDiagnostics.record(appContext, "revoke.save", "ok");
+            } catch (RuntimeException error) {
+                UnsentDiagnostics.record(appContext, "revoke.save", "db_error");
+                hookFailedPrivately("keep_unsent", "Can't record unsent message history", error);
+            }
+        } else {
+            UnsentDiagnostics.record(appContext, "revoke.skip", "no_context");
         }
         activeAt.put("keep_unsent", System.currentTimeMillis());
     }
@@ -950,14 +1051,23 @@ public final class Settings {
      * Cache the text for local history, but never alter what Messenger renders.
      */
     public static String labelKeptUnsent(String text, String messageId) {
-        if (wouldUse("keep_unsent") && text != null && !text.isEmpty()) {
-            captureIncomingMessage(messageId, text);
+        if (text == null) {
+            UnsentDiagnostics.record(appContext, "hook.render_text", "null");
+            return null;
         }
+        if (text.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "hook.render_text", "empty_text");
+            return text;
+        }
+        boolean active = wouldUse("keep_unsent");
+        UnsentDiagnostics.record(appContext, "hook.render_text", active ? "enabled" : "disabled");
+        if (active) captureIncomingMessage(messageId, text);
         return text;
     }
 
     /** History-only mode never changes Messenger's own unsent state. */
     public static boolean suppressUnsent(boolean original, String messageId) {
+        UnsentDiagnostics.record(appContext, "hook.delta_unsent", original ? "true" : "false");
         // This is Messenger's own per-message unsent predicate. Observe true values to mark
         // the local archive, but always return the original value so Messenger behaves normally.
         if (original) recordUnsent(messageId);

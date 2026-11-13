@@ -36,7 +36,7 @@ internal fun Document.addSettingsEntry() {
     application.child("activity", "name" to "app.hushmessenger.extension.UnsentHistoryActivity",
         "label" to "Unsent message history", "exported" to "false",
         "theme" to "@android:style/Theme.Material.NoActionBar")
-    application.child("activity", "name" to "app.hushmessenger.extension.MusicShareActivity",
+    application.child("activity", "name" to "app.hushmessenger.extension.AudioPickerActivity",
         "label" to "Send music", "exported" to "false", "excludeFromRecents" to "true",
         "theme" to "@android:style/Theme.Translucent.NoTitleBar")
     // The app drawer entry is an alias, so settings can hide it while the shortcuts and Menu tab row keep working.
@@ -122,6 +122,39 @@ internal fun Document.addFeature(key: String) {
     })
 }
 
+internal fun Document.addUnsentDebugMetadata(
+    e2eeCapture: Boolean,
+    deltaHook: Boolean,
+    textRenderHook: Boolean,
+    notificationSites: Int,
+    parserSites: Int,
+    nativeParserSites: Int,
+    revokeSites: Int,
+    mediaSites: Int,
+) {
+    val application = getElementsByTagName("application").item(0) as Element
+    val values = listOf(
+        "hush.unsent.e2ee_capture_hook" to e2eeCapture.toString(),
+        "hush.unsent.delta_hook" to deltaHook.toString(),
+        "hush.unsent.text_render_hook" to textRenderHook.toString(),
+        "hush.unsent.notification_hook_sites" to notificationSites.toString(),
+        "hush.unsent.message_parser_hook_sites" to parserSites.toString(),
+        "hush.unsent.native_parser_hook_sites" to nativeParserSites.toString(),
+        "hush.unsent.revoke_hook_sites" to revokeSites.toString(),
+        "hush.unsent.media_capture_hook_sites" to mediaSites.toString(),
+    )
+    for ((name, value) in values) {
+        val metadata = application.getElementsByTagName("meta-data")
+        if ((0 until metadata.length).any { (metadata.item(it) as Element).getAttribute("android:name") == name }) {
+            throw PatchException("HushMessenger: $name is already installed. Start with the stock APK.")
+        }
+        application.appendChild(createElement("meta-data").apply {
+            setAttribute("android:name", name)
+            setAttribute("android:value", value)
+        })
+    }
+}
+
 internal fun injectControl(key: String, methods: Map<String, List<MutableMethod>>) {
     // A multi-method control must pass every contract before its first edit.
     for ((hook, selectedMethods) in methods) for (method in selectedMethods) {
@@ -195,16 +228,44 @@ private fun controlPatch(
 ): BytecodePatch {
     var applied = false
     var nativeRoutesApplied = false
+    var unsentE2eeHookInstalled = false
+    var unsentDeltaHookInstalled = false
+    var unsentTextRenderHookInstalled = false
+    var unsentNotificationHookSites = 0
+    var unsentMessageParserHookSites = 0
+    var unsentNativeParserHookSites = 0
+    var unsentRevokeHookSites = 0
+    var unsentMediaCaptureHookSites = 0
     val featureResources = resourcePatch(description = "Record HushMessenger capability: $key") {
         dependsOn(settingsResources)
         execute {
             applied = false
             nativeRoutesApplied = false
+            unsentE2eeHookInstalled = false
+            unsentDeltaHookInstalled = false
+            unsentTextRenderHookInstalled = false
+            unsentNotificationHookSites = 0
+            unsentMessageParserHookSites = 0
+            unsentNativeParserHookSites = 0
+            unsentRevokeHookSites = 0
+            unsentMediaCaptureHookSites = 0
             document("AndroidManifest.xml").use { it.requireFeatureAbsent(key) }
         }
         finalize {
             if (applied) document("AndroidManifest.xml").use {
                 it.addFeature(key)
+                if (key == "keep_unsent") {
+                    it.addUnsentDebugMetadata(
+                        unsentE2eeHookInstalled,
+                        unsentDeltaHookInstalled,
+                        unsentTextRenderHookInstalled,
+                        unsentNotificationHookSites,
+                        unsentMessageParserHookSites,
+                        unsentNativeParserHookSites,
+                        unsentRevokeHookSites,
+                        unsentMediaCaptureHookSites,
+                    )
+                }
                 if (nativeRoutesApplied) it.addNativeBubbleRoutesMetadata()
             }
         }
@@ -218,7 +279,14 @@ private fun controlPatch(
         compatibleWith(compatibility)
         dependsOn(settingsExtension, featureResources)
         execute {
-            val selected = hooks.toSet().ifEmpty { setOf(key) }
+            val requested = hooks.toSet().ifEmpty { setOf(key) }
+            // delta_unsent is optional on checked profiles; its absence must not block other capture routes.
+            val selected = if (key == "keep_unsent" && "delta_unsent" in requested &&
+                discoveredControls["delta_unsent"].isNullOrEmpty()) requested - "delta_unsent" else requested
+            if (key == "keep_unsent") {
+                unsentDeltaHookInstalled = "delta_unsent" in selected
+                unsentTextRenderHookInstalled = "unsent_indicator" in selected
+            }
             validateControls(discoveredControls, selected)
             val methods = selected.associateWith { hook ->
                 discoveredControls.getValue(hook).map { original ->
@@ -250,6 +318,14 @@ private fun controlPatch(
                 incoming.validateE2eeIncomingCapture()
                 deleting.validateE2eeDeleteCapture()
                 incoming to deleting
+            } else null
+            // The receive worker runs in :background_e2ee, separate from the main-process SettingsProvider.
+            // Validate MessengerApplication.onCreate so its process-local Settings context exists before receive hooks.
+            val messenger581ProcessInitialization = if (key == "keep_unsent" && packageMetadata.versionCode == "346213510") {
+                mutableClassDefBy("Lcom/facebook/messenger/app/MessengerApplication;").methods.singleOrNull { method ->
+                    method.name == "onCreate" && method.returnType == "V" && method.parameterTypes.isEmpty()
+                }?.also { it.validateMessenger581ApplicationInitialization() }
+                    ?: throw PatchException("Keep unsent: Messenger 581 Application initializer is missing")
             } else null
             // Messenger 581 uses a newer QPL message-model route and a separate Armadillo media
             // completion callback. Validate the complete reflection/metadata contract before editing.
@@ -298,21 +374,34 @@ private fun controlPatch(
                 nativeParser.validateNativeMessageModelCapture()
                 nativeParser
             } else null
+            val messenger581Revoke = if (key == "keep_unsent" && packageMetadata.versionCode == "346213510") {
+                mutableClassDefBy("LX/SYG;").methods.singleOrNull { method ->
+                    method.name == "D0o" && method.returnType == "Ljava/util/List;" &&
+                        method.parameterTypes == listOf("[B")
+                }?.also { it.validateE2eeDeleteCapture(messenger581 = true) }
+                    ?: throw PatchException("Keep unsent: Messenger 581 E2EE revoke hook is missing")
+            } else null
             val messenger581ImageCapture = if (key == "keep_unsent" && packageMetadata.versionCode == "346213510") {
                 val callback = mutableClassDefBy("LX/SUm;").methods.singleOrNull { method ->
                     method.name == "onCompletion" && method.returnType == "V" &&
                         method.parameterTypes == listOf("Ljava/lang/Object;")
                 } ?: throw PatchException("Keep unsent: Messenger 581 image completion callback is missing")
                 callback.validateDownloadedImageCapture()
-                val mediaMetadata = mutableClassDefBy("LX/8uu;")
-                if (mediaMetadata.fields.none { it.name == "A03" && it.type == "J" } ||
-                    mediaMetadata.fields.none { it.name == "A06" && it.type == "Ljava/lang/String;" } ||
-                    mediaMetadata.fields.none { it.name == "A07" && it.type == "Ljava/lang/String;" } ||
-                    mutableClassDefBy("LX/SUm;").fields.none { it.name == "A07" && it.type == "LX/8uu;" }) {
-                    throw PatchException("Keep unsent: Messenger 581 downloaded-image metadata contract changed")
-                }
+                validateMessenger581ImageMetadataContract(
+                    mutableClassDefBy("LX/8uu;"),
+                    mutableClassDefBy("LX/SUm;"),
+                )
                 callback
             } else null
+            if (key == "keep_unsent") {
+                unsentE2eeHookInstalled = e2eeUnsend != null ||
+                    (messenger581MessageCapture != null && messenger581Revoke != null)
+                unsentMessageParserHookSites = if (messenger581MessageCapture != null) 1 else 0
+                unsentNativeParserHookSites = if (messenger581NativeMessageCapture != null) 1 else 0
+                unsentRevokeHookSites = (if (e2eeUnsend != null) 1 else 0) +
+                    (if (messenger581Revoke != null) 1 else 0)
+                unsentMediaCaptureHookSites = if (messenger581ImageCapture != null) 1 else 0
+            }
             if (key == COMMUNITY_INBOX) {
                 val contract = communityInboxContract ?: throw PatchException("Messenger controls: the native community inbox route is missing")
                 val host = mutableClassDefBy(HOST_SCREENS)
@@ -336,18 +425,29 @@ private fun controlPatch(
                 nativeRoutesApplied = nativeBubbleRoutesVerified
             } else {
                 injectControl(key, methods)
+                messenger581ProcessInitialization?.injectMessenger581ApplicationInitialization()
                 e2eeUnsend?.let { (incoming, deleting) ->
                     incoming.injectE2eeIncomingCapture()
                     deleting.injectE2eeDeleteCapture()
                 }
                 messenger581MessageCapture?.injectMessageModelCapture()
                 messenger581NativeMessageCapture?.injectNativeMessageModelCapture()
+                if (messenger581MessageCapture != null) {
+                    val materializer = mutableClassDefBy("LX/SDX;").methods.singleOrNull { method ->
+                        method.name == "A0T" && method.returnType == "LX/Qdg;" &&
+                            method.parameterTypes == listOf("LX/QPL;", "Ljava/lang/String;", "Ljava/util/Set;", "Z")
+                    } ?: throw PatchException("Keep unsent: Messenger 581 message materializer is missing")
+                    materializer.injectMessenger581MaterializedMessageCapture()
+                }
+                messenger581Revoke?.injectE2eeDeleteCapture(messenger581 = true)
                 messenger581ImageCapture?.injectDownloadedImageCapture()
                 if (key == "keep_unsent") {
+                    var sites = 0
                     notificationCaptureMethods.forEach { (className, methodId) ->
-                        mutableClassDefBy(className).methods.single { it.hookId() == methodId }
+                        sites += mutableClassDefBy(className).methods.single { it.hookId() == methodId }
                             .injectNotificationCapture()
                     }
+                    unsentNotificationHookSites = sites
                 }
             }
             recordControl(key)
@@ -410,14 +510,14 @@ val allowScreenshotPatch = controlPatch("allow_screenshot", "Allow screenshots",
 @Suppress("unused")
 val hideReadReceiptsPatch = controlPatch("hide_read_receipts", "Hide read receipts", "Stops sending read receipts. Opened encrypted chats can stay unread on this phone. Replying or switching this off may notify the sender. Group coverage isn't verified.", "Privacy", "hide_read_receipts", "read_mailbox")
 private val messenger581Compatibility = MessengerTarget.compatibility(
-    mapOf("581.0.0.49.91" to MessengerTarget.VERSIONS.getValue("581.0.0.49.91"))
+    mapOf("581.0.0.49.91" to listOf(346213510))
 )
 
 @Suppress("unused")
 val sendMusicPatch = controlPatch(
     "send_music",
     "Send music from chat",
-    "Adds a music picker to the voice-message sheet. Selected audio is handed to Messenger's native audio share flow; the final bubble style depends on Messenger's audio attachment support.",
+    "Adds a music picker to Messenger's Xapp voice-message sheet. Selected audio is converted to Messenger's native MediaResource and waveform model, then passed to its native voice-message sender.",
     "Conversations",
     messenger581Compatibility,
     "send_music",
