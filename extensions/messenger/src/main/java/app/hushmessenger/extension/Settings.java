@@ -704,14 +704,29 @@ public final class Settings {
             }
             Object metadata = readDeclaredField(downloader, "A07");
             if (metadata == null) {
-                UnsentDiagnostics.record(appContext, "media.skip", "missing_metadata");
+                logMediaMetadataShape(downloader, result, null);
+                UnsentDiagnostics.record(appContext, "media.skip", "metadata_container_missing");
                 return;
             }
             Object directPath = readDeclaredField(metadata, "A07");
             Object mime = readDeclaredField(metadata, "A06");
             Object timestamp = readDeclaredField(metadata, "A03");
-            if (!(directPath instanceof String) || !(mime instanceof String) || !(timestamp instanceof Number)) {
-                UnsentDiagnostics.record(appContext, "media.skip", "missing_metadata");
+            if (!(directPath instanceof String) || ((String) directPath).isEmpty()) {
+                logMediaMetadataShape(downloader, result, metadata);
+                UnsentDiagnostics.record(appContext, "media.skip",
+                    directPath == null ? "direct_path_missing" : "metadata_type_mismatch");
+                return;
+            }
+            if (!(mime instanceof String) || ((String) mime).isEmpty()) {
+                logMediaMetadataShape(downloader, result, metadata);
+                UnsentDiagnostics.record(appContext, "media.skip",
+                    mime == null ? "mime_missing" : "metadata_type_mismatch");
+                return;
+            }
+            if (!(timestamp instanceof Number)) {
+                logMediaMetadataShape(downloader, result, metadata);
+                UnsentDiagnostics.record(appContext, "media.skip",
+                    timestamp == null ? "timestamp_missing" : "metadata_type_mismatch");
                 return;
             }
             ClassLoader loader = downloader.getClass().getClassLoader();
@@ -743,6 +758,43 @@ public final class Settings {
             }
         }
         return null;
+    }
+
+    /**
+     * Privacy-safe reflection summary for runtime diagnostics. It reports class/field/type
+     * names and whether a field is null, but never serializes field values, IDs, URLs or text.
+     */
+    private static String safeObjectShape(Object instance) {
+        if (instance == null) return "null";
+        StringBuilder out = new StringBuilder(instance.getClass().getName());
+        int shown = 0;
+        Class<?> owner = instance.getClass();
+        while (owner != null && owner != Object.class && shown < 24) {
+            for (java.lang.reflect.Field field : owner.getDeclaredFields()) {
+                if (java.lang.reflect.Modifier.isStatic(field.getModifiers()) || shown >= 24) continue;
+                String state = "unreadable";
+                try {
+                    field.setAccessible(true);
+                    state = field.get(instance) == null ? "null" : "set";
+                } catch (Throwable ignored) { }
+                out.append(shown == 0 ? "[" : ",")
+                    .append(field.getName()).append(":")
+                    .append(field.getType().getName()).append("=")
+                    .append(state);
+                shown++;
+            }
+            owner = owner.getSuperclass();
+        }
+        if (shown > 0) out.append("]");
+        if (shown == 24) out.append("…");
+        return out.toString();
+    }
+
+    private static void logMediaMetadataShape(Object downloader, Object result, Object metadata) {
+        android.util.Log.i("HushMessengerUnsend",
+            "media.metadata_shape downloader=" + safeObjectShape(downloader) +
+            " result=" + safeObjectShape(result) +
+            " metadata=" + safeObjectShape(metadata));
     }
 
     public static void captureDownloadedImage(String directPath, String mimeType,
