@@ -1315,6 +1315,8 @@ internal fun MutableMethod.injectMessenger581MaterializedMessageCapture() {
     }
     addInstructions(0,
         "invoke-static/range {p1 .. p1}, $SETTINGS->captureIncomingQpl(Ljava/lang/Object;)V")
+    addInstructions(0,
+        "invoke-static {}, $SETTINGS->noteMessenger581MaterializerEntry()V")
 }
 
 internal fun MutableMethod.validateMessageModelCapture(): Int {
