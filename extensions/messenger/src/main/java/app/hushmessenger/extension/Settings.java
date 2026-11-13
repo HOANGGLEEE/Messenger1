@@ -722,7 +722,9 @@ public final class Settings {
                 UnsentDiagnostics.record(appContext, "media.skip", "metadata_container_missing");
                 return;
             }
-            Object directPath = readDeclaredField(metadata, "A07");
+            // Messenger 581 maps client__e2ee_direct_path through Q1b.A06 -> RTh.A01 -> LX/8uu.A05.
+            // A07 is a different optional String field and is null on the tested image downloads.
+            Object directPath = readDeclaredField(metadata, "A05");
             Object mime = readDeclaredField(metadata, "A06");
             Object timestamp = readDeclaredField(metadata, "A03");
             if (!(directPath instanceof String) || ((String) directPath).isEmpty()) {
