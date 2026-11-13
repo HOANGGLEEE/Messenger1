@@ -43,6 +43,25 @@ public class SettingsTest {
         assertTrue(Settings.hideMetaAiTab());
     }
 
+    @Test public void secondaryProcessProviderExposesOnlyTheCurrentKeepUnsentState() {
+        HostScreens.failed = false;
+        Settings.installed = java.util.Set.of("keep_unsent");
+        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
+        Bundle enabled = new SettingsProvider().call(
+            SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
+        assertTrue(enabled.getBoolean("enabled"));
+
+        Settings.preferences.edit().putBoolean("paused", true).commit();
+        Bundle paused = new SettingsProvider().call(
+            SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
+        assertFalse(paused.getBoolean("enabled"));
+
+        Settings.preferences.edit().putBoolean("paused", false).putBoolean("safe_mode", true).commit();
+        Bundle safeMode = new SettingsProvider().call(
+            SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
+        assertFalse(safeMode.getBoolean("enabled"));
+    }
+
     @Test public void allControlsPreserveStockUntilEnabled() {
         assertFalse(Settings.hideStories());
         assertFalse(Settings.hideFacebook());
