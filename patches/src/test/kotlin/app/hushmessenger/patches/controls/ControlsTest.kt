@@ -80,8 +80,10 @@ class ControlsTest {
         flags,
         null,
         null,
-        ImmutableMethodImplementation(2, emptyList(), null, null),
-    )).apply { addInstructionsWithLabels(0, "return-void") }
+        ImmutableMethodImplementation(3, emptyList(), null, null),
+    )).apply {
+        addInstructionsWithLabels(0, if (returnType == "V") "return-void" else "const/4 v0, 0x0\nreturn v0")
+    }
 
     @Test fun messenger581ApplicationInitializesSettingsInEveryProcess() {
         val app = messenger581ApplicationOnCreate()
