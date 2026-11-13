@@ -133,8 +133,7 @@ public final class UnsentDiagnostics {
             ? detail : null;
         Context app = appContext(context != null ? context : Settings.appContext);
 
-        if (isSecondaryProcess(app) && shouldForward(safeStage, safeResult) &&
-                !Boolean.FALSE.equals(providerAvailable)) {
+        if (isSecondaryProcess(app) && shouldForward(safeStage, safeResult)) {
             try {
                 Bundle extras = new Bundle();
                 extras.putString("stage", safeStage);
