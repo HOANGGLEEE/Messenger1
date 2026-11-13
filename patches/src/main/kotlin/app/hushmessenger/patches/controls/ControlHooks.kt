@@ -1246,6 +1246,7 @@ internal fun MutableMethod.injectKeepUnsent() {
     addInstructionsWithLabels(0, """
         invoke-static {}, $SETTINGS->keepUnsent()Z
         move-result v0
+        invoke-static {v0}, $SETTINGS->noteUnsentIntentHook(Z)V
         if-eqz v0, :stock_behavior
         const-string v0, "messenger_message_id"
         invoke-virtual {p1, v0}, Landroid/content/Intent;->getStringExtra(Ljava/lang/String;)Ljava/lang/String;
