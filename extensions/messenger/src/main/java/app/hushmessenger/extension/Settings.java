@@ -1,5 +1,6 @@
 package app.hushmessenger.extension;
 
+import android.app.Application;
 import android.app.Notification;
 import android.app.Person;
 import android.content.Context;
@@ -72,9 +73,45 @@ public final class Settings {
     static boolean wouldUse(String key) {
         if (!HostScreens.started) HostScreens.initializeLate();
         if (HostScreens.failed) return false;
+        if ("keep_unsent".equals(key)) {
+            Boolean mainProcessState = mainProcessKeepUnsentEnabled();
+            if (mainProcessState != null) return mainProcessState;
+        }
+        return locallyWouldUse(key);
+    }
+
+    /** Main-process view used by the private provider when a secondary Messenger process asks. */
+    static boolean keepUnsentEnabledLocally() {
+        return locallyWouldUse("keep_unsent");
+    }
+
+    private static boolean locallyWouldUse(String key) {
         SharedPreferences prefs = preferences;
-        return installed.contains(key) && prefs != null && !prefs.getBoolean("paused", false)
-                && !CrashGuard.isSafeMode() && prefs.getBoolean(key, false);
+        return !HostScreens.failed && installed.contains(key) && prefs != null
+                && !prefs.getBoolean("paused", false)
+                && !prefs.getBoolean("safe_mode", false)
+                && !CrashGuard.isSafeMode()
+                && prefs.getBoolean(key, false);
+    }
+
+    /**
+     * Messenger 581 receives encrypted messages in :background_e2ee. SharedPreferences are cached
+     * per process, so ask the private main-process provider for the current switch state. Root Mount
+     * installs may not expose the provider; in that case the process-local snapshot is the fallback.
+     */
+    private static Boolean mainProcessKeepUnsentEnabled() {
+        Context context = appContext;
+        if (context == null) return null;
+        String processName = Application.getProcessName();
+        if (processName == null || processName.equals(context.getPackageName())) return null;
+        try {
+            Bundle state = context.getContentResolver().call(
+                Uri.parse("content://" + context.getPackageName() + ".hush.settings"),
+                SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
+            return state == null || !state.containsKey("enabled") ? null : state.getBoolean("enabled", false);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
     }
 
     public static long lastActive(String key) {
