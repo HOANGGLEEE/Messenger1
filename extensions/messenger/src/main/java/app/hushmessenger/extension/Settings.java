@@ -609,8 +609,13 @@ public final class Settings {
      * Snapshot the verified Messenger 581 message-model object without changing Messenger's own
      * state. The model exposes message_id/thread_key/is_unsent and its nested image metadata.
      */
+    public static void noteMessenger581MaterializerEntry() {
+        UnsentDiagnostics.record(appContext, "materializer.entry", "entered");
+    }
+
     public static void captureIncomingQpl(Object qpl) {
         UnsentDiagnostics.record(appContext, "model.callback", "entered");
+        UnsentDiagnostics.recordObjectShape(appContext, "qpl", safeObjectShape(qpl));
         if (!wouldUse("keep_unsent")) {
             UnsentDiagnostics.record(appContext, "model.skip", "disabled");
             return;
@@ -630,7 +635,9 @@ public final class Settings {
         String senderId = messageModelString(qpl, "A0K");
         long messageTimestamp = messageModelLong(qpl, "A0M");
         Object content = invokeModelGetter(qpl, "A0B");
+        UnsentDiagnostics.recordObjectShape(appContext, "content", safeObjectShape(content));
         Object messageContent = invokeModelGetter(content, "A01");
+        UnsentDiagnostics.recordObjectShape(appContext, "message_content", safeObjectShape(messageContent));
         Object textValue = readMessageModelValue(messageContent, "BOa", MESSAGE_MODEL_TEXT);
         String body = textValue instanceof String ? (String) textValue : null;
         captureIncomingMessage(messageId, threadKey, senderId, body, messageTimestamp);
@@ -640,19 +647,26 @@ public final class Settings {
         if (context != null && messageContent != null) {
             try {
                 Object imageContainer = invokeModelGetter(messageContent, "A03");
+                UnsentDiagnostics.recordObjectShape(appContext, "image_container", safeObjectShape(imageContainer));
                 Object imageRows = invokeModelGetter(imageContainer, "A00");
                 if (imageRows instanceof Iterable<?>) {
                     AntiUnsendStore store = AntiUnsendStore.get(context);
                     long now = System.currentTimeMillis();
                     for (Object image : (Iterable<?>) imageRows) {
-                        String directPath = (String) readMessageModelValue(image, "BOa", MESSAGE_MODEL_DIRECT_PATH);
-                        String mimeType = (String) readMessageModelValue(image, "BOa", MESSAGE_MODEL_DIRECT_PATH_MIME);
+                        UnsentDiagnostics.recordObjectShape(appContext, "image_item", safeObjectShape(image));
+                        Object rawDirectPath = readMessageModelValue(image, "BOa", MESSAGE_MODEL_DIRECT_PATH);
+                        Object rawMimeType = readMessageModelValue(image, "BOa", MESSAGE_MODEL_DIRECT_PATH_MIME);
                         Object rawTimestamp = readMessageModelValue(image, "Akr", MESSAGE_MODEL_MEDIA_KEY_TIMESTAMP);
-                        long mediaKeyTimestamp = rawTimestamp instanceof Number ? ((Number) rawTimestamp).longValue() : 0;
-                        if (directPath == null || directPath.isEmpty() || mimeType == null ||
-                                !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) continue;
-                        store.captureMediaMetadataForMessage(directPath, messageId, threadKey,
-                            mediaKeyTimestamp, mimeType, now);
+                        if (!(rawDirectPath instanceof String) || ((String) rawDirectPath).isEmpty() ||
+                                !(rawMimeType instanceof String) ||
+                                !((String) rawMimeType).toLowerCase(java.util.Locale.ROOT).startsWith("image/")) {
+                            UnsentDiagnostics.record(appContext, "model.skip", "metadata_type_mismatch");
+                            continue;
+                        }
+                        long mediaKeyTimestamp = rawTimestamp instanceof Number
+                            ? ((Number) rawTimestamp).longValue() : 0;
+                        store.captureMediaMetadataForMessage((String) rawDirectPath, messageId, threadKey,
+                            mediaKeyTimestamp, (String) rawMimeType, now);
                         linkedImages++;
                     }
                 }
@@ -703,8 +717,8 @@ public final class Settings {
                 return;
             }
             Object metadata = readDeclaredField(downloader, "A07");
+            logMediaMetadataShape(downloader, result, metadata);
             if (metadata == null) {
-                logMediaMetadataShape(downloader, result, null);
                 UnsentDiagnostics.record(appContext, "media.skip", "metadata_container_missing");
                 return;
             }
@@ -712,19 +726,16 @@ public final class Settings {
             Object mime = readDeclaredField(metadata, "A06");
             Object timestamp = readDeclaredField(metadata, "A03");
             if (!(directPath instanceof String) || ((String) directPath).isEmpty()) {
-                logMediaMetadataShape(downloader, result, metadata);
                 UnsentDiagnostics.record(appContext, "media.skip",
                     directPath == null ? "direct_path_missing" : "metadata_type_mismatch");
                 return;
             }
             if (!(mime instanceof String) || ((String) mime).isEmpty()) {
-                logMediaMetadataShape(downloader, result, metadata);
                 UnsentDiagnostics.record(appContext, "media.skip",
                     mime == null ? "mime_missing" : "metadata_type_mismatch");
                 return;
             }
             if (!(timestamp instanceof Number)) {
-                logMediaMetadataShape(downloader, result, metadata);
                 UnsentDiagnostics.record(appContext, "media.skip",
                     timestamp == null ? "timestamp_missing" : "metadata_type_mismatch");
                 return;
