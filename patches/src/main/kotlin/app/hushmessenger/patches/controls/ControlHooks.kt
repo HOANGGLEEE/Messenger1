@@ -1478,6 +1478,21 @@ internal fun MutableMethod.injectDownloadedImageCapture() {
         "invoke-static/range {p0 .. p1}, $SETTINGS->captureDownloadedImageFromCallback(Ljava/lang/Object;Ljava/lang/Object;)V")
 }
 
+/**
+ * Messenger 581 image metadata field mapping, verified against the 581.0.0.49.91 APK:
+ * Q1b.A06() reads client__e2ee_direct_path (0xbb595234), SCW.A02 stores it in
+ * RTh.A01, and S7t passes RTh.A01 into LX/8uu.A05. A06 is the MIME type and
+ * A03 is the media-key timestamp. A07 is a different optional String.
+ */
+internal fun validateMessenger581ImageMetadataContract(mediaMetadata: ClassDef, downloader: ClassDef) {
+    if (mediaMetadata.fields.none { it.name == "A03" && it.type == "J" } ||
+        mediaMetadata.fields.none { it.name == "A05" && it.type == "Ljava/lang/String;" } ||
+        mediaMetadata.fields.none { it.name == "A06" && it.type == "Ljava/lang/String;" } ||
+        downloader.fields.none { it.name == "A07" && it.type == "LX/8uu;" }) {
+        throw PatchException("Messenger controls: verified Messenger 581 downloaded-image metadata contract changed")
+    }
+}
+
 internal fun MutableMethod.validateKeepUnsent() {
     validateScratch()
     if (returnType != "V") throw PatchException("Messenger controls: keep_unsent hook must return void")
