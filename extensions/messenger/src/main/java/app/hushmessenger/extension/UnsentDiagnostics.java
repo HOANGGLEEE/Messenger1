@@ -118,19 +118,74 @@ public final class UnsentDiagnostics {
      * null/set state only; never pass field values, IDs, paths, URLs, text or byte contents.
      */
     public static boolean recordObjectShape(Context context, String category, String shape) {
-        if (!DETAIL_CATEGORIES.contains(category) || shape == null || shape.isEmpty()) return false;
-        String safe = shape.replace('\r', ' ').replace('\n', ' ').trim();
-        if (safe.isEmpty()) return false;
-        if (safe.length() > 1800) safe = safe.substring(0, 1800);
-        recordInternal(context, "object.shape", category, safe);
+        if (!DETAIL_CATEGORIES.contains(category) || !isSafeObjectShape(shape)) return false;
+        recordInternal(context, "object.shape", category, shape);
+        return true;
+    }
+
+    /**
+     * Accept only the exact redacted shape grammar emitted by Settings.safeObjectShape:
+     * class name followed by optional [field:type=null|set|unreadable,...].
+     * This rejects IDs, chat text, paths, URLs and arbitrary strings at both process boundaries.
+     */
+    private static boolean isSafeObjectShape(String shape) {
+        if (shape == null || shape.isEmpty() || shape.length() > 1800 ||
+                !shape.equals(shape.trim()) || shape.indexOf('\r') >= 0 || shape.indexOf('\n') >= 0) {
+            return false;
+        }
+        if ("null".equals(shape)) return true;
+
+        String value = shape;
+        boolean truncated = value.endsWith("…");
+        if (truncated) value = value.substring(0, value.length() - 1);
+        int open = value.indexOf('[');
+        if (open < 0) return isSafeTypeName(value) && !truncated;
+
+        if (!value.endsWith("]") || !isSafeTypeName(value.substring(0, open))) return false;
+        String fields = value.substring(open + 1, value.length() - 1);
+        if (fields.isEmpty()) return false;
+        String[] entries = fields.split(",", -1);
+        if (entries.length > 24 || (truncated && entries.length != 24)) return false;
+        for (String entry : entries) {
+            int colon = entry.indexOf(':');
+            int equals = entry.lastIndexOf('=');
+            if (colon <= 0 || equals <= colon + 1 || equals == entry.length() - 1 ||
+                    !isSafeFieldName(entry.substring(0, colon)) ||
+                    !isSafeTypeName(entry.substring(colon + 1, equals))) {
+                return false;
+            }
+            String state = entry.substring(equals + 1);
+            if (!("null".equals(state) || "set".equals(state) || "unreadable".equals(state))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isSafeFieldName(String name) {
+        if (name == null || name.isEmpty() ||
+                !Character.isJavaIdentifierStart(name.charAt(0))) return false;
+        for (int i = 1; i < name.length(); i++) {
+            if (!Character.isJavaIdentifierPart(name.charAt(i))) return false;
+        }
+        return true;
+    }
+
+    private static boolean isSafeTypeName(String name) {
+        if (name == null || name.isEmpty() || name.length() > 256) return false;
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (!(Character.isLetterOrDigit(c) || c == '_' || c == '$' || c == '.' ||
+                    c == '/' || c == ';' || c == '[' || c == ']')) return false;
+        }
         return true;
     }
 
     private static void recordInternal(Context context, String stage, String result, String detail) {
         String safeStage = STAGES.contains(stage) ? stage : "other";
         String safeResult = RESULTS.contains(result) ? result : "other";
-        String safeDetail = "object.shape".equals(safeStage) && DETAIL_CATEGORIES.contains(safeResult)
-            ? detail : null;
+        String safeDetail = "object.shape".equals(safeStage) && DETAIL_CATEGORIES.contains(safeResult) &&
+            isSafeObjectShape(detail) ? detail : null;
         Context app = appContext(context != null ? context : Settings.appContext);
 
         if (isSecondaryProcess(app) && shouldForward(safeStage, safeResult)) {
@@ -164,10 +219,8 @@ public final class UnsentDiagnostics {
         if (!STAGES.contains(stage) || !RESULTS.contains(result)) return false;
         String safeDetail = null;
         if ("object.shape".equals(stage)) {
-            if (!DETAIL_CATEGORIES.contains(result) || detail == null) return false;
-            safeDetail = detail.replace('\r', ' ').replace('\n', ' ').trim();
-            if (safeDetail.isEmpty()) return false;
-            if (safeDetail.length() > 1800) safeDetail = safeDetail.substring(0, 1800);
+            if (!DETAIL_CATEGORIES.contains(result) || !isSafeObjectShape(detail)) return false;
+            safeDetail = detail;
         } else if (detail != null) {
             return false;
         }
