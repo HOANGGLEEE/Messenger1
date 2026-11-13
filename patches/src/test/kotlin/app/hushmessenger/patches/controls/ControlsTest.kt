@@ -80,7 +80,7 @@ class ControlsTest {
         flags,
         null,
         null,
-        ImmutableMethodImplementation(1, emptyList(), null, null),
+        ImmutableMethodImplementation(2, emptyList(), null, null),
     )).apply { addInstructionsWithLabels(0, "return-void") }
 
     @Test fun messenger581ApplicationInitializesSettingsInEveryProcess() {
