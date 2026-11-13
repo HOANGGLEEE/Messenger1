@@ -387,13 +387,10 @@ private fun controlPatch(
                         method.parameterTypes == listOf("Ljava/lang/Object;")
                 } ?: throw PatchException("Keep unsent: Messenger 581 image completion callback is missing")
                 callback.validateDownloadedImageCapture()
-                val mediaMetadata = mutableClassDefBy("LX/8uu;")
-                if (mediaMetadata.fields.none { it.name == "A03" && it.type == "J" } ||
-                    mediaMetadata.fields.none { it.name == "A06" && it.type == "Ljava/lang/String;" } ||
-                    mediaMetadata.fields.none { it.name == "A07" && it.type == "Ljava/lang/String;" } ||
-                    mutableClassDefBy("LX/SUm;").fields.none { it.name == "A07" && it.type == "LX/8uu;" }) {
-                    throw PatchException("Keep unsent: Messenger 581 downloaded-image metadata contract changed")
-                }
+                validateMessenger581ImageMetadataContract(
+                    mutableClassDefBy("LX/8uu;"),
+                    mutableClassDefBy("LX/SUm;"),
+                )
                 callback
             } else null
             if (key == "keep_unsent") {
