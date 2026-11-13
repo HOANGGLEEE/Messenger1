@@ -52,6 +52,8 @@ internal const val DRAWER_FOLDER_SELECTED = "HomeDrawerFragmentBase.handleOnFold
 internal const val DRAWER_REFRESH = "HomeDrawerFragmentBase.refreshDrawerItems"
 internal const val AVATAR_TAB_EVENT = "Lcom/facebook/xapp/messaging/composer/avatar/composertab/event/ActivateAvatarSticker;"
 internal const val COMPOSER_FACTORY = "Lcom/facebook/messaging/msys/thread/composer/configuration/xapp/BaseXappComposerConfigurationFactory;"
+internal const val XAPP_RECORDING_CONTROLS = "Lcom/facebook/xapp/messaging/composer/audio/recordcontrols/fragments/XappRecordingControlsDialogFragment;"
+internal const val SEND_MUSIC_HOOK = "$XAPP_RECORDING_CONTROLS->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V"
 internal const val SEARCH_CLEAR_TAG = "messenger_search_clear_button_tag"
 internal const val MONTAGE_CARD = "Lcom/facebook/messaging/montage/model/MontageCard;"
 internal const val STORY_MARK_READ_TAG = "MontageMsysMarkReadHandler"
@@ -131,6 +133,7 @@ internal val expectedHooks = mapOf(
     "hide_read_receipts" to setOf("LX/AX0;->run()V"),
     "read_mailbox" to setOf("LX/9sm;->A01(Ljava/lang/Long;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function0;)V"),
     "keep_unsent" to setOf("LX/SH3;->A01(Landroid/content/Intent;Lcom/facebook/auth/usersession/FbUserSession;Ljava/lang/String;)V"),
+    "send_music" to emptySet(),
     "anonymous_stories" to setOf("LX/HNV;->C1V(${MONTAGE_CARD}Z)V"),
     "save_stories" to setOf("LX/JgG;->onClick(Landroid/view/View;)V"),
     "growth_notes" to setOf("Lcom/facebook/presence/note/ui/nux/controller/NotesNuxController;->" +
@@ -243,6 +246,9 @@ internal fun findControls(classes: Iterable<ClassDef>, community: CommunityInbox
             ?.initialValue.let { (it as? StringEncodedValue)?.value }
         for (method in cls.methods) {
             fun add(key: String) { found.getValue(key).add(method) }
+            if (activeProfile.hooks["send_music"]?.isNotEmpty() == true && cls.type == XAPP_RECORDING_CONTROLS &&
+                method.name == "onViewCreated" && method.returnType == "V" &&
+                method.parameterTypes == listOf("Landroid/view/View;", "Landroid/os/Bundle;")) add("send_music")
             if ((cls.type == EPHEMERAL_VIEWER && (method.name in EPHEMERAL_DIALOGS || method.name == "onResume")) ||
                 (cls.type == QUICKSNAP_VIEWER && method.name == "onCreateView")) {
                 try {
@@ -977,6 +983,40 @@ internal fun MutableMethod.injectKeyboardTabsInline() {
     addInstructions(copy, "invoke-static/range {v$tabs .. v$tabs}, $SETTINGS->removeAvatarTabs(Ljava/lang/Iterable;)V")
 }
 
+internal fun MutableMethod.validateSendMusic(): Int {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: send-music recording sheet has no code")
+    val setup = code.firstOrNull()
+    val setupCall = setup as? FiveRegisterInstruction
+    val setupReference = (setup as? ReferenceInstruction)?.reference as? DexMethodReference
+    val superCalls = code.indices.filter { index ->
+        code[index].opcode == Opcode.INVOKE_SUPER &&
+            (code[index] as? ReferenceInstruction)?.reference?.toString() ==
+            "Lcom/facebook/mig/bottomsheet/MigBottomSheetDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V"
+    }
+    val call = code.getOrNull(superCalls.singleOrNull() ?: -1) as? FiveRegisterInstruction
+    val validSetup = setup?.opcode == Opcode.INVOKE_STATIC &&
+        setupReference?.toString() == "LX/33S;->A0j(Ljava/lang/Object;)V" &&
+        setupCall?.let { it.registerCount == 1 && it.registerC == 3 } == true
+    val validSuper = call?.let {
+        it.registerCount == 3 && it.registerC == 2 && it.registerD == 3 && it.registerE == 4
+    } == true
+    if (definingClass != XAPP_RECORDING_CONTROLS || name != "onViewCreated" ||
+        returnType != "V" || parameterTypes != listOf("Landroid/view/View;", "Landroid/os/Bundle;") ||
+        AccessFlags.STATIC.isSet(accessFlags) || implementation?.registerCount != 5 ||
+        code.size < 3 || superCalls != listOf(1) || !validSetup || !validSuper) {
+        throw PatchException("Messenger controls: Messenger 581 audio recording sheet changed")
+    }
+    return superCalls.single() + 1
+}
+
+/** Adds the picker entry only after the native recording sheet has initialized its view. */
+internal fun MutableMethod.injectSendMusic() {
+    val insertion = validateSendMusic()
+    addInstructions(insertion,
+        "invoke-static/range {p0 .. p0}, Lapp/hushmessenger/extension/AudioPickerBridge;->install(Ljava/lang/Object;)V")
+}
+
 internal fun MutableMethod.validateOutgoingTyping(): Int {
     if (parameterTypes != listOf("Ljava/lang/String;", "Z") || AccessFlags.STATIC.isSet(accessFlags)) {
         throw PatchException("Messenger controls: the encrypted typing call takes ${parameterTypes.joinToString()}, expected String and boolean")
@@ -1194,7 +1234,7 @@ internal fun MutableMethod.injectE2eeIncomingCapture() {
  * is_unsent + unsent_timestamp_ms. Pin that exact sequence instead of treating every generic
  * DeleteMessageClientDelta as an unsend.
  */
-internal fun MutableMethod.validateE2eeDeleteCapture(): Pair<Int, Int> {
+internal fun MutableMethod.validateE2eeDeleteCapture(messenger581: Boolean = false): Pair<Int, Int> {
     val code = implementation?.instructions?.toList()
         ?: throw PatchException("Messenger controls: E2EE revoke hook has no code")
     val strings = code.mapNotNull { ((it as? ReferenceInstruction)?.reference as? StringReference)?.string }.toSet()
@@ -1220,7 +1260,9 @@ internal fun MutableMethod.validateE2eeDeleteCapture(): Pair<Int, Int> {
     }
     val match = matches.singleOrNull()
         ?: throw PatchException("Messenger controls: verified E2EE RevokeMessage route changed")
-    if (definingClass != "LX/VtI;" || name != "Czd" || returnType != "Ljava/util/List;" ||
+    val expectedOwner = if (messenger581) "LX/SYG;" else "LX/VtI;"
+    val expectedName = if (messenger581) "D0o" else "Czd"
+    if (definingClass != expectedOwner || name != expectedName || returnType != "Ljava/util/List;" ||
         parameterTypes != listOf("[B") || AccessFlags.STATIC.isSet(accessFlags) ||
         "is_unsent" !in strings || "unsent_timestamp_ms" !in strings) {
         throw PatchException("Messenger controls: verified E2EE revoke hook changed")
@@ -1228,10 +1270,227 @@ internal fun MutableMethod.validateE2eeDeleteCapture(): Pair<Int, Int> {
     return match
 }
 
-internal fun MutableMethod.injectE2eeDeleteCapture() {
-    val (index, messageId) = validateE2eeDeleteCapture()
+internal fun MutableMethod.injectE2eeDeleteCapture(messenger581: Boolean = false) {
+    val (index, messageId) = validateE2eeDeleteCapture(messenger581)
     addInstructions(index + 1,
         "invoke-static {v$messageId}, $SETTINGS->recordUnsent(Ljava/lang/String;)V")
+}
+
+/**
+ * Messenger 581 converts the message-model fragment into QPL after the encrypted payload has
+ * been materialized. This model carries stable message/thread IDs, unsent state and image metadata.
+ */
+/**
+ * Messenger 581 runs encrypted receive and media callbacks in :background_e2ee. Its SettingsProvider
+ * belongs to the main process, so initialize this extension's process-local context from the real
+ * Application lifecycle in every process before any message hook can run.
+ */
+internal fun MutableMethod.validateMessenger581ApplicationInitialization() {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Keep unsent: Messenger 581 Application.onCreate has no code")
+    if (definingClass != "Lcom/facebook/messenger/app/MessengerApplication;" ||
+        name != "onCreate" || returnType != "V" || parameterTypes.isNotEmpty() ||
+        AccessFlags.STATIC.isSet(accessFlags) || implementation!!.registerCount < 1 || code.isEmpty()) {
+        throw PatchException("Keep unsent: Messenger 581 Application initialization contract changed")
+    }
+}
+
+internal fun MutableMethod.injectMessenger581ApplicationInitialization() {
+    validateMessenger581ApplicationInitialization()
+    addInstructions(0,
+        "invoke-static {p0}, $SETTINGS->initialize(Landroid/content/Context;)V")
+}
+
+internal fun MutableMethod.injectMessenger581MaterializedMessageCapture() {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Keep unsent: Messenger 581 message materializer has no code")
+    val readsMessageId = code.any {
+        (it as? ReferenceInstruction)?.reference?.toString() == "LX/QPL;->A0I()Ljava/lang/String;"
+    }
+    if (definingClass != "LX/SDX;" || name != "A0T" || returnType != "LX/Qdg;" ||
+        AccessFlags.STATIC.isSet(accessFlags) ||
+        parameterTypes != listOf("LX/QPL;", "Ljava/lang/String;", "Ljava/util/Set;", "Z") ||
+        !readsMessageId) {
+        throw PatchException("Keep unsent: Messenger 581 message materializer changed")
+    }
+    addInstructions(0,
+        "invoke-static/range {p1 .. p1}, $SETTINGS->captureIncomingQpl(Ljava/lang/Object;)V")
+    addInstructions(0,
+        "invoke-static {}, $SETTINGS->noteMessenger581MaterializerEntry()V")
+}
+
+internal fun MutableMethod.validateMessageModelCapture(): Int {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: message-model capture hook has no code")
+    val strings = code.mapNotNull {
+        ((it as? ReferenceInstruction)?.reference as? StringReference)?.string
+    }.toSet()
+    val returns = code.indices.filter { code[it].opcode == Opcode.RETURN_OBJECT }
+    // The last return is a null fallback. Capture on the successful QPL return
+    // immediately after its constructor, not on the final null return.
+    val successReturn = returns.firstOrNull() ?: -1
+    val success = code.getOrNull(successReturn) as? OneRegisterInstruction
+    val constructor = code.getOrNull(successReturn - 1)
+    val nullReturn = code.getOrNull(code.lastIndex) as? OneRegisterInstruction
+    if (definingClass != "LX/WXH;" || name != "A0V" || returnType != "LX/QPL;" ||
+        !AccessFlags.STATIC.isSet(accessFlags) || parameterTypes != listOf("[B") ||
+        implementation!!.registerCount != 19 || returns.size != 2 ||
+        successReturn != code.lastIndex - 2 || success?.registerA != 0 ||
+        constructor?.opcode != Opcode.INVOKE_DIRECT ||
+        (constructor as? ReferenceInstruction)?.reference?.toString() !=
+            "LX/Pyu;-><init>(LX/933;)V" ||
+        nullReturn?.registerA != 0 ||
+        !strings.containsAll(setOf("message_id", "thread_key", "is_unsent", "unsent_timestamp_ms"))) {
+        throw PatchException("Messenger controls: verified Messenger 581 message-model parser changed")
+    }
+    return successReturn
+}
+
+internal fun MutableMethod.injectMessageModelCapture() {
+    val returnIndex = validateMessageModelCapture()
+    // Count parser entry separately from successful QPL returns. This distinguishes a receive
+    // route that never runs from a parser that runs but takes its null/error fallback.
+    addInstructions(returnIndex,
+        "invoke-static {v0}, $SETTINGS->captureIncomingQpl(Ljava/lang/Object;)V")
+    addInstructions(0,
+        "invoke-static {}, $SETTINGS->noteMessageModelParserEntry()V")
+}
+
+/**
+ * Messenger 581's normal "native" / "dynamic_fallback" path parses message fragments through
+ * StaxMessageNativeDeserializerJNI. The A0V protobuf parser above is only the dynamic fallback;
+ * it is not the parser entered by the native path used by MDCore's message hydration.
+ *
+ * Pin the native method's exact descriptor, JNI call, QPL allocation and success/null returns.
+ * Capture only the successfully constructed QPL, never the null fallback.
+ */
+internal fun MutableMethod.validateNativeMessageModelCapture(): Int {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: native message-model parser has no code")
+    val references = code.mapNotNull {
+        (it as? ReferenceInstruction)?.reference?.toString()
+    }.toSet()
+    val strings = code.mapNotNull {
+        ((it as? ReferenceInstruction)?.reference as? StringReference)?.string
+    }.toSet()
+    val returns = code.indices.filter { code[it].opcode == Opcode.RETURN_OBJECT }
+    val successReturn = returns.firstOrNull() ?: -1
+    val success = code.getOrNull(successReturn) as? OneRegisterInstruction
+    val constructor = code.getOrNull(successReturn - 1)
+    val allocation = code.getOrNull(successReturn - 2) as? ReferenceInstruction
+    val nullReturn = code.getOrNull(code.lastIndex) as? OneRegisterInstruction
+    if (definingClass != "LX/1Tn;" || name != "A00" || returnType != "LX/QPL;" ||
+        !AccessFlags.STATIC.isSet(accessFlags) || parameterTypes != listOf("[B") ||
+        implementation!!.registerCount != 4 || returns.size != 2 ||
+        successReturn != code.lastIndex - 2 || success?.registerA != 0 ||
+        constructor?.opcode != Opcode.INVOKE_DIRECT ||
+        (constructor as? ReferenceInstruction)?.reference?.toString() !=
+            "LX/Pyu;-><init>(LX/933;)V" ||
+        allocation?.reference?.toString() != "LX/QPL;" ||
+        nullReturn?.registerA != 0 ||
+        "modularsync-minimal-android" !in strings ||
+        "Lcom/facebook/xapp/messaging/modularsync/message/parser/nativedeserializer/StaxMessageNativeDeserializerJNI;->deserializeNative([BILjava/lang/String;Lcom/facebook/pando/PandoBuildConfigFlatbufferAssetReaderJNI;)Lcom/facebook/pando/TreeJNI;" !in references ||
+        "LX/33S;->A0j(Ljava/lang/Object;)V" !in references) {
+        throw PatchException("Messenger controls: verified Messenger 581 native message-model parser changed")
+    }
+    return successReturn
+}
+
+internal fun MutableMethod.injectNativeMessageModelCapture() {
+    val returnIndex = validateNativeMessageModelCapture()
+    addInstructions(returnIndex,
+        "invoke-static {v0}, $SETTINGS->captureIncomingQpl(Ljava/lang/Object;)V")
+    addInstructions(0,
+        "invoke-static {}, $SETTINGS->noteMessageModelParserEntry()V")
+}
+
+/**
+ * Validate the generated image converter that exposes the main E2EE direct path and media-key
+ * timestamp. Preview paths are deliberately not used as substitutes for the original image.
+ */
+internal fun MutableMethod.validateMessageImageMetadata() {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: image metadata converter has no code")
+    val strings = code.mapNotNull {
+        ((it as? ReferenceInstruction)?.reference as? StringReference)?.string
+    }.toSet()
+    val fields = code.mapNotNull {
+        ((it as? ReferenceInstruction)?.reference as? FieldReference)
+    }
+    if (definingClass != "LX/WXH;" || name != "A07" || returnType != "LX/QSD;" ||
+        parameterTypes.singleOrNull()?.contains("AppMessageContentFBMessageImagesContentImages") != true ||
+        "client__e2ee_direct_path_mime_type" !in strings ||
+        "client__e2ee_preview_direct_path" !in strings ||
+        fields.none { it.name == "clientE2EeDirectPath_" } ||
+        fields.none { it.name == "clientE2EeMediaKeyTimestamp_" }) {
+        throw PatchException("Messenger controls: verified Messenger 581 image metadata converter changed")
+    }
+}
+
+/**
+ * ArmadilloMediaDownloader completes the local file before invoking this callback. The metadata
+ * object supplies direct_path, mime_type and media_key_timestamp; the temporary file is copied
+ * before Messenger's callback path can delete it.
+ */
+internal fun MutableMethod.validateDownloadedImageCapture(): Int {
+    val code = implementation?.instructions?.toList()
+        ?: throw PatchException("Messenger controls: downloaded-image callback has no code")
+    val references = code.mapNotNull {
+        (it as? ReferenceInstruction)?.reference?.toString()
+    }.toSet()
+    val fileResult = code.indices.singleOrNull { index ->
+        val instruction = code[index]
+        instruction.opcode == Opcode.MOVE_RESULT_OBJECT &&
+            (instruction as? OneRegisterInstruction)?.registerA == 19 &&
+            index > 0 && code[index - 1].opcode == Opcode.INVOKE_STATIC &&
+            (code[index - 1] as? ReferenceInstruction)?.reference?.toString() ==
+                "LX/001;->A0F(Ljava/lang/String;)Ljava/io/File;"
+    }
+    val metadataFieldLoad = code.any { instruction ->
+        instruction.opcode == Opcode.IGET_OBJECT &&
+            (instruction as? ReferenceInstruction)?.reference?.toString() == "LX/SUm;->A07:LX/8uu;"
+    }
+    if (definingClass != "LX/SUm;" || name != "onCompletion" || returnType != "V" ||
+        AccessFlags.STATIC.isSet(accessFlags) ||
+        parameterTypes != listOf("Ljava/lang/Object;") || implementation!!.registerCount != 26 ||
+        fileResult == null || !metadataFieldLoad ||
+        "LX/RQz;->A00:Landroid/net/Uri;" !in references ||
+        "LX/RQz;->A01:Lcom/facebook/msys/mcf/MsysError;" !in references ||
+        "Landroid/net/Uri;->getPath()Ljava/lang/String;" !in references ||
+        "Ljava/io/File;->exists()Z" !in references ||
+        "Ljava/io/File;->canRead()Z" !in references ||
+        "Ljava/io/File;->length()J" !in references) {
+        throw PatchException("Messenger controls: verified Messenger 581 downloaded-image callback changed")
+    }
+    return fileResult
+}
+
+/**
+ * p0/p1 are adjacent parameter registers. The runtime bridge follows Messenger's exact callback
+ * contract: resolve the completed local File from resultUri.getPath(), while retaining the
+ * metadata directPath only as the stable media-archive key.
+ */
+internal fun MutableMethod.injectDownloadedImageCapture() {
+    validateDownloadedImageCapture()
+    // The completion result already carries the file URI. Snapshot it before stock
+    // callback branches can return or release the temporary file.
+    addInstructions(0,
+        "invoke-static/range {p0 .. p1}, $SETTINGS->captureDownloadedImageFromCallback(Ljava/lang/Object;Ljava/lang/Object;)V")
+}
+
+/**
+ * Messenger 581 image metadata field mapping, verified against the 581.0.0.49.91 APK:
+ * Q1b.A06() reads client__e2ee_direct_path (0xbb595234), SCW.A02 stores it in
+ * RTh.A01, and S7t passes RTh.A01 into LX/8uu.A05. A06 is the MIME type and
+ * A03 is the media-key timestamp. A07 is a different optional String.
+ */
+internal fun validateMessenger581ImageMetadataContract(mediaMetadata: ClassDef, downloader: ClassDef) {
+    if (mediaMetadata.fields.none { it.name == "A03" && it.type == "J" } ||
+        mediaMetadata.fields.none { it.name == "A05" && it.type == "Ljava/lang/String;" } ||
+        mediaMetadata.fields.none { it.name == "A06" && it.type == "Ljava/lang/String;" } ||
+        downloader.fields.none { it.name == "A07" && it.type == "LX/8uu;" }) {
+        throw PatchException("Messenger controls: verified Messenger 581 downloaded-image metadata contract changed")
+    }
 }
 
 internal fun MutableMethod.validateKeepUnsent() {
@@ -1246,6 +1505,7 @@ internal fun MutableMethod.injectKeepUnsent() {
     addInstructionsWithLabels(0, """
         invoke-static {}, $SETTINGS->keepUnsent()Z
         move-result v0
+        invoke-static {v0}, $SETTINGS->noteUnsentIntentHook(Z)V
         if-eqz v0, :stock_behavior
         const-string v0, "messenger_message_id"
         invoke-virtual {p1, v0}, Landroid/content/Intent;->getStringExtra(Ljava/lang/String;)Ljava/lang/String;

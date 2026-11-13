@@ -69,7 +69,7 @@ public class SetupSummaryTest {
             assertTrue(text.contains("people: installed=true, selected=true, active=true,"));
             assertTrue(text.contains("stories: installed=false, selected=true, active=false,"));
             assertTrue(text.matches("(?s).*\nFacebook caller checks: trusted=\\d+, signer_differs=\\d+, meta_signed_build=\\d+, not_family=\\d+, error=\\d+\n"));
-            assertEquals(40, text.split("\n").length);
+            assertEquals(41, text.split("\n").length);
             assertFalse(text.contains("private-"));
             assertFalse(text.contains("account-secret"));
             assertFalse(text.contains("account_id"));
@@ -151,9 +151,10 @@ public class SetupSummaryTest {
                 assertTrue(control[0], report.contains(", scope=" + control[2] + "\n"));
             assertTrue(report.matches("(?s).*hide_read_receipts: installed=true, selected=true, active=true, last_active=\\d+s ago, scope=.*"));
             assertTrue(report.contains("Replying or switching this off may notify the sender."));
-            assertTrue(report.contains("private local text snapshot"));
-            assertTrue(report.contains("Messenger's own unsend behavior is left unchanged."));
-            assertTrue(report.contains("verified E2EE receive/revoke path"));
+            assertTrue(report.contains("Keeps local message text and IDs observed in Messenger"));
+            assertTrue(report.contains("photos are copied only after Messenger downloads them"));
+            assertTrue(report.contains("Notification snapshots are a separate fallback"));
+            assertTrue(report.contains("Group coverage is not verified"));
             assertTrue(report.contains("This doesn't add replay or saving."));
             assertTrue(report.contains("Native Bubbles needs Android 11, account support and notification permissions."));
             assertTrue(report.contains("Search and community folders keep them. Delivery and unread counts stay unchanged."));
@@ -214,7 +215,8 @@ public class SetupSummaryTest {
             assertTrue(text, text.matches("(?s).*\nFacebook caller checks: [^\n]*\nHook errors:\n"
                 + "avatar_stickers: java\\.lang\\.UnsupportedOperationException at Settings\\.removeAvatarTabs:\\d+" + time
                 + "menu_row: java\\.lang\\.IllegalStateException at SetupSummaryTest\\.aFailedHookShowsInCopySetupAndOnItsSwitchWithoutTheExceptionMessage:\\d+" + time));
-            assertEquals(43, text.split("\n").length);
+            // 9 fixed header lines + 31 controls + caller checks + Hook errors header + 2 error records.
+            assertEquals(44, text.split("\n").length);
             assertFalse(text.contains("private-"));
             assertFalse(Settings.preferences.getAll().toString().contains("private-"));
         }

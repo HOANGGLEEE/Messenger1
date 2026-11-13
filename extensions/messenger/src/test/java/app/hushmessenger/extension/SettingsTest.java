@@ -43,6 +43,25 @@ public class SettingsTest {
         assertTrue(Settings.hideMetaAiTab());
     }
 
+    @Test public void secondaryProcessProviderExposesOnlyTheCurrentKeepUnsentState() {
+        HostScreens.failed = false;
+        Settings.installed = java.util.Set.of("keep_unsent");
+        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
+        Bundle enabled = new SettingsProvider().call(
+            SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
+        assertTrue(enabled.getBoolean("enabled"));
+
+        Settings.preferences.edit().putBoolean("paused", true).commit();
+        Bundle paused = new SettingsProvider().call(
+            SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
+        assertFalse(paused.getBoolean("enabled"));
+
+        Settings.preferences.edit().putBoolean("paused", false).putBoolean("safe_mode", true).commit();
+        Bundle safeMode = new SettingsProvider().call(
+            SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
+        assertFalse(safeMode.getBoolean("enabled"));
+    }
+
     @Test public void allControlsPreserveStockUntilEnabled() {
         assertFalse(Settings.hideStories());
         assertFalse(Settings.hideFacebook());
@@ -68,23 +87,35 @@ public class SettingsTest {
         assertTrue(Settings.hideStories());
     }
 
+    @Test public void messageModelParserEntryCounterOnlyAdvancesWhenCaptureIsEnabled() {
+        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
+        Settings.noteMessageModelParserEntry();
+        assertEquals(1, Settings.unsentModelParserEntries());
+
+        Settings.preferences.edit().putBoolean("paused", true).commit();
+        Settings.noteMessageModelParserEntry();
+        assertEquals(1, Settings.unsentModelParserEntries());
+    }
+
     @Test @Config(sdk = {28, 36}) public void legacyUnsendHelpersRecordHistoryWithoutChangingMessengerState() {
         Settings.activeAt.clear();
         Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
         assertTrue(Settings.keepUnsent());
         assertEquals("Eligibility is not an interception", 0, Settings.lastActive("keep_unsent"));
 
-        // The render hook may cache plaintext for local history, but it must return Messenger's value unchanged.
+        // The render hook may cache plaintext for local history. The unsent predicate records
+        // true values, but always returns Messenger's original value unchanged.
         assertEquals("ordinary text", Settings.labelKeptUnsent("ordinary text", "other-message"));
         assertTrue(Settings.suppressUnsent(true, "other-message"));
-        assertFalse(Settings.suppressUnsent(false, "other-message"));
-        assertEquals("Ordinary message reads are not interceptions", 0, Settings.lastActive("keep_unsent"));
+        assertFalse(Settings.suppressUnsent(false, "not-unsent"));
+        assertTrue("A true Messenger unsent predicate is a recorded event",
+            Settings.lastActive("keep_unsent") > 0);
 
         Settings.recordUnsent("retained-message");
         assertTrue(Settings.lastActive("keep_unsent") > 0);
         Settings.recordUnsent(null);
         Settings.recordUnsent("");
-        assertEquals(java.util.Set.of("retained-message"),
+        assertEquals(java.util.Set.of("other-message", "retained-message"),
             Settings.preferences.getStringSet("kept_unsent_ids", java.util.Set.of()));
         assertTrue(Settings.isKeptUnsent("retained-message"));
         assertFalse(Settings.isKeptUnsent(null));
@@ -114,6 +145,32 @@ public class SettingsTest {
         assertEquals(2, AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listUnsent(10).size());
     }
 
+    private static final class MissingMetadataDownloader {
+        private final Object A07 = null;
+        private final String privateValue = "must-never-appear-in-debug";
+    }
+
+    private static final class CompletedImageResult {
+        private final Uri A00 = Uri.parse("file:///tmp/hush-test-image.jpg");
+        private final Object A01 = null;
+    }
+
+    @Test @Config(sdk = {28, 36}) public void missingMediaMetadataIsDiagnosedWithoutSerializingFieldValues() throws Exception {
+        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
+        Settings.captureDownloadedImageFromCallback(
+            new MissingMetadataDownloader(), new CompletedImageResult());
+
+        String report = UnsentDiagnostics.report(RuntimeEnvironment.getApplication());
+        assertTrue(report.contains("metadata_container_missing"));
+        assertFalse(report.contains("must-never-appear-in-debug"));
+
+        java.lang.reflect.Method shape = Settings.class.getDeclaredMethod("safeObjectShape", Object.class);
+        shape.setAccessible(true);
+        String summary = (String) shape.invoke(null, new MissingMetadataDownloader());
+        assertTrue(summary.contains("privateValue"));
+        assertFalse(summary.contains("must-never-appear-in-debug"));
+    }
+
     @Test @Config(sdk = {28, 36}) public void retainedUnsendChoiceSurvivesRestartWithoutChangingStockUnsend() {
         Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
         Settings.recordUnsent("retained-message");
@@ -128,17 +185,18 @@ public class SettingsTest {
             Switch choice = root.findViewWithTag("keep_unsent");
             assertTrue(choice.isChecked());
             String spoken = choice.getContentDescription().toString();
-            assertTrue(spoken.contains("private local text snapshot"));
-            assertTrue(spoken.contains("Messenger's own unsend behavior is left unchanged"));
-            assertTrue(spoken.contains("verified E2EE receive/revoke path"));
-            assertTrue(spoken.contains("media attachments"));
+            assertTrue(spoken.contains("Keeps local message text and IDs"));
+            assertTrue(spoken.contains("photos are copied only after Messenger downloads them"));
+            assertTrue(spoken.contains("Notification snapshots are a separate fallback"));
+            assertTrue(spoken.contains("Group coverage is not verified"));
             assertEquals("No unsend activity observed since restart",
                 ((android.widget.TextView) root.findViewWithTag("active_keep_unsent")).getText().toString());
         }
         assertEquals("original text", Settings.labelKeptUnsent("original text", "retained-message"));
         assertTrue(Settings.suppressUnsent(true, "retained-message"));
         assertFalse(Settings.suppressUnsent(false, "retained-message"));
-        assertEquals("Reading an old retained message is not a new interception", 0, Settings.lastActive("keep_unsent"));
+        assertTrue("Reading a retained unsent predicate is still observed as an event",
+            Settings.lastActive("keep_unsent") > 0);
     }
 
     @Test @Config(sdk = {28, 36}) public void concurrentUnsendIdentifiersSurviveADiskReload() throws Exception {
@@ -250,14 +308,22 @@ public class SettingsTest {
         assertEquals(2, Settings.unsentNotificationSaved());
     }
 
-    @Test public void settingsExposeLocalUnsentHistory() {
+    @Test public void settingsExposeLocalUnsentHistoryFromFixedNavigation() {
         try (var controller = Robolectric.buildActivity(SettingsActivity.class).setup()) {
-            View history = controller.get().getWindow().getDecorView().findViewWithTag("unsent_history");
-            assertNotNull(history);
+            View history = controller.get().getWindow().getDecorView().findViewWithTag("tab_history");
+            assertNotNull("History is a fixed top-level destination", history);
+            assertTrue(history.isShown());
+            assertNull("History is no longer buried in the Privacy settings", 
+                controller.get().getWindow().getDecorView().findViewWithTag("unsent_history"));
             history.performClick();
             Intent launched = Shadows.shadowOf(controller.get()).getNextStartedActivity();
             assertNotNull(launched);
-            assertEquals(UnsentHistoryActivity.class.getName(), launched.getComponent().getClassName());
+            boolean direct = launched.getComponent() != null &&
+                UnsentHistoryActivity.class.getName().equals(launched.getComponent().getClassName());
+            boolean hosted = launched.getComponent() != null &&
+                HostScreens.SCREEN_HOST.equals(launched.getComponent().getClassName()) &&
+                HostScreens.HISTORY.equals(launched.getStringExtra(HostScreens.EXTRA));
+            assertTrue("History navigation opens the dedicated history screen", direct || hosted);
         }
     }
 

@@ -1,0 +1,63 @@
+name: Verify Messenger 581 archive and native audio
+
+on:
+  push:
+    branches:
+      - feature/unsent-images-messenger-581
+      - fix/messenger581-e2ee-revoke
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "extensions/messenger/**"
+      - "patches/src/main/kotlin/**"
+      - "patches/src/test/kotlin/**"
+      - ".github/workflows/verify-messenger-581.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: verify-messenger-581-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run extension tests, patch tests and Android bundle build
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace --write-verification-metadata sha256 \
+            :extensions:messenger:testDebugUnitTest \
+            :patches:test \
+            :patches:buildAndroid
+
+      - name: Upload generated patch bundle
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: messenger-581-hushmessenger-patch-bundle
+          path: |
+            patches/build/libs/*.mpp
+            gradle/verification-metadata.xml
+          if-no-files-found: warn
+          retention-days: 7

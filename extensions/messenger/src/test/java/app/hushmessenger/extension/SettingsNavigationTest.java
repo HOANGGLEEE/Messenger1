@@ -1,8 +1,12 @@
 package app.hushmessenger.extension;
 
+import android.content.Intent;
+import android.graphics.Insets;
 import android.os.Bundle;
 import android.os.Looper;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.widget.EditText;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -26,21 +30,87 @@ public class SettingsNavigationTest {
         Settings.preferences.edit().clear().commit();
     }
 
+    @Test public void unsentHistoryIsReachableFromTheFixedTopNavigation() {
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            View root = screen.get().getWindow().getDecorView();
+            View history = root.findViewWithTag("tab_history");
+            assertNotNull("History must be reachable without scrolling to Privacy", history);
+            assertTrue(history.isShown());
+            assertNull("The old buried history link should not be duplicated in the control list",
+                root.findViewWithTag("unsent_history"));
+
+            history.performClick();
+            Intent opened = Shadows.shadowOf(screen.get()).getNextStartedActivity();
+            assertNotNull(opened);
+            boolean direct = opened.getComponent() != null &&
+                UnsentHistoryActivity.class.getName().equals(opened.getComponent().getClassName());
+            boolean hosted = opened.getComponent() != null &&
+                HostScreens.SCREEN_HOST.equals(opened.getComponent().getClassName()) &&
+                HostScreens.HISTORY.equals(opened.getStringExtra(HostScreens.EXTRA));
+            assertTrue("Top navigation should open the dedicated history screen", direct || hosted);
+        }
+    }
+
+    @Test public void historyHeaderAppliesModernStatusBarInset() {
+        try (var screen = Robolectric.buildActivity(UnsentHistoryActivity.class).setup()) {
+            View content = screen.get().getWindow().findViewById(android.R.id.content);
+            View root = ((ViewGroup) content).getChildAt(0);
+            WindowInsets insets = new WindowInsets.Builder()
+                .setInsets(WindowInsets.Type.statusBars(), Insets.of(0, 64, 0, 0))
+                .setInsets(WindowInsets.Type.navigationBars(), Insets.of(0, 0, 0, 72))
+                .build();
+            root.dispatchApplyWindowInsets(insets);
+            int baseTop = Math.round(UnsentHistoryActivity.HISTORY_TOP_GAP_DP * screen.get().getResources().getDisplayMetrics().density);
+            assertEquals("History content must start below the Android status bar",
+                baseTop + 64, root.getPaddingTop());
+        }
+    }
+
+    @Test public void unsentHistoryHasCompactFiltersAndCollapsedDiagnostics() {
+        try (var screen = Robolectric.buildActivity(UnsentHistoryActivity.class).setup()) {
+            View root = screen.get().getWindow().getDecorView();
+            assertNotNull(root.findViewWithTag("unsent_history_status"));
+            assertNotNull(root.findViewWithTag("unsent_history_clear"));
+            assertNotNull(root.findViewWithTag("unsent_history_filter_0"));
+            assertNotNull(root.findViewWithTag("unsent_history_filter_1"));
+            assertNotNull(root.findViewWithTag("unsent_history_filter_2"));
+            assertNotNull(root.findViewWithTag("unsent_history_filter_3"));
+            assertNotNull(root.findViewWithTag("unsent_history_list"));
+            View diagnostics = root.findViewWithTag("unsent_history_diagnostics");
+            assertNotNull(diagnostics);
+            assertEquals(View.GONE, diagnostics.getVisibility());
+            View search = findEditText(root);
+            assertNotNull("History should be searchable", search);
+        }
+    }
+
+    private static View findEditText(View view) {
+        if (view instanceof android.widget.EditText) return view;
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View found = findEditText(group.getChildAt(i));
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
     @Test public void categoriesCombineWithSearchAndClearFiltersRecovers() {
         try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
             View root = screen.get().getWindow().getDecorView();
             TextView count = root.findViewWithTag("search_status");
             root.findViewWithTag("category_chats").performClick();
-            assertEquals("9 of 30 installed controls", count.getText().toString());
+            assertEquals("10 of 31 installed controls", count.getText().toString());
             assertEquals(View.GONE, ((View) root.findViewWithTag("people").getParent()).getVisibility());
             ((EditText) root.findViewWithTag("find_control")).setText("People You");
             assertEquals(View.VISIBLE, root.findViewWithTag("empty_state").getVisibility());
             root.findViewWithTag("clear_filters").performClick();
-            assertEquals("30 of 30 installed controls", count.getText().toString());
+            assertEquals("31 of 31 installed controls", count.getText().toString());
             assertEquals(View.GONE, root.findViewWithTag("empty_state").getVisibility());
             assertTrue(root.findViewWithTag("category_all").isSelected());
             root.findViewWithTag("category_more").performClick();
-            assertEquals("13 of 30 installed controls", count.getText().toString());
+            assertEquals("13 of 31 installed controls", count.getText().toString());
             assertEquals(View.VISIBLE, ((View) root.findViewWithTag("facebook").getParent()).getVisibility());
         }
     }
@@ -95,7 +165,7 @@ public class SettingsNavigationTest {
             root.findViewWithTag("tab_controls").performClick();
             assertEquals("People You", ((EditText) root.findViewWithTag("find_control")).getText().toString());
             assertTrue(root.findViewWithTag("category_inbox").isSelected());
-            assertEquals("1 of 30 installed controls", ((TextView) root.findViewWithTag("search_status")).getText().toString());
+            assertEquals("1 of 31 installed controls", ((TextView) root.findViewWithTag("search_status")).getText().toString());
             assertTrue(((Switch) root.findViewWithTag("people")).isChecked());
             assertTrue(Settings.enabled("people"));
         }

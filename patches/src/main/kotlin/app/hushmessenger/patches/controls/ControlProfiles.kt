@@ -519,6 +519,28 @@ internal val PROFILE_346213494 = ControlProfile(
     nativeCommunityInbox = "LX/1v7;->A0G(LX/1v7;LX/1vz;Ljava/lang/String;Z)V|LX/25I;-><init>(Lcom/facebook/auth/usersession/FbUserSession;LX/24h;LX/250;LX/25G;LX/23L;LX/25D;LX/4qc;LX/4wd;LX/1vb;Lcom/facebook/mig/scheme/interfaces/MigColorScheme;LX/4tQ;Lcom/google/common/collect/ImmutableList;Ljava/lang/String;Z)V|LX/1vu;->A01()LX/1vb;|LX/1v7;->A0H(LX/1v7;LX/1vb;)V|LX/2LW;->A03:Lcom/facebook/messaging/model/threads/ThreadSummary;|LX/2io;->A03(Lcom/facebook/messaging/model/threads/ThreadSummary;)Z|Lcom/facebook/messaging/model/threadkey/ThreadKey;->A0n(Lcom/facebook/messaging/model/threadkey/ThreadKey;)Z|Lcom/facebook/messaging/model/threadkey/ThreadKey;->A1J()Z|Lcom/facebook/messaging/model/threadkey/ThreadKey;->A1W()Z|LX/1vb;->A0E:LX/1vb;|LX/25I;->\$prefixOffsetCallback:LX/4qc;|LX/1vP;->A00:LX/1v7;|LX/1v7;->A0Z:LX/1vu;|LX/1vu;->A07:LX/1vw;|LX/1vw;->A01:LX/1w6;|LX/1w6;->A00:LX/1w5;|LX/1w5;->A00()LX/1BZ;|LX/1BZ;->A0L:LX/1BZ;",
 )
 
+private fun ControlProfile.withAdditionalHooks(additional: Map<String, Set<String>>) = ControlProfile(
+    hooks = hooks + additional,
+    pluginSentinel = pluginSentinel,
+    preferenceGetter = preferenceGetter,
+    peopleKey = peopleKey,
+    peopleFlagCheck = peopleFlagCheck,
+    subtabsSupplier = subtabsSupplier,
+    browserPreferenceKey = browserPreferenceKey,
+    browserPreferenceIndex = browserPreferenceIndex,
+    adFilterSize = adFilterSize,
+    adFilterExits = adFilterExits,
+    bubbleCapabilityGetter = bubbleCapabilityGetter,
+    bubbleRolloutGetter = bubbleRolloutGetter,
+    nativeBubbleRoutes = nativeBubbleRoutes,
+    nativeCommunityInbox = nativeCommunityInbox,
+)
+
+/** The uploaded 346213510 APK is the first build with the verified music-picker composer hook. */
+internal val PROFILE_346213510 = PROFILE_346213494.withAdditionalHooks(
+    mapOf("send_music" to setOf(SEND_MUSIC_HOOK))
+)
+
 /** Each supported build's profile, by version code. Builds that share a mapping share a profile. */
 internal val controlProfiles: Map<Int, ControlProfile> = mapOf(
     346013387 to BASE_PROFILE,
@@ -544,7 +566,7 @@ internal val controlProfiles: Map<Int, ControlProfile> = mapOf(
     346013445 to PROFILE_346013357,
     346213494 to PROFILE_346213494,
     346213498 to PROFILE_346213494,
-    346213510 to PROFILE_346213494,
+    346213510 to PROFILE_346213510,
     346213514 to PROFILE_346213494,
     346213528 to PROFILE_346213494,
     346213531 to PROFILE_346213494,

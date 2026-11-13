@@ -94,6 +94,7 @@ hook save_stories LX/N4X;->onClick(Landroid/view/View;)V
 hook screenshot_viewers Lcom/facebook/messaging/media/ephemeralmedia/viewer/EphemeralMediaViewerFragment;->A1E(Landroid/os/Bundle;)Landroid/app/Dialog;
 hook screenshot_viewers Lcom/facebook/messaging/media/ephemeralmedia/viewer/EphemeralMediaViewerFragment;->onResume()V
 hook screenshot_viewers Lcom/facebook/messaging/quicksnap/consumption/viewer/MsgrQuicksnapViewerFragment;->onCreateView(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;
+hook send_music Lcom/facebook/xapp/messaging/composer/audio/recordcontrols/fragments/XappRecordingControlsDialogFragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V
 hook stories LX/1wB;->A00()Z
 hook subtabs LX/2KH;->run()V
 hook suggested_replies LX/7FE;->A06(LX/7FE;)Z
