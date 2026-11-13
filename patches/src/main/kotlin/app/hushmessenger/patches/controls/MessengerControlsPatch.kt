@@ -248,7 +248,13 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
         compatibleWith(MessengerTarget.COMPATIBILITY)
         dependsOn(settingsExtension, featureResources)
         execute {
-            val selected = hooks.toSet().ifEmpty { setOf(key) }
+            val requested = hooks.toSet().ifEmpty { setOf(key) }
+            // delta_unsent is a verified optional observer on only some checked DEX profiles.
+            // Keep the core history patch compatible with profiles that do not expose this method.
+            val selected = if (key == "keep_unsent" && "delta_unsent" in requested &&
+                discoveredControls["delta_unsent"].isNullOrEmpty()) {
+                requested - "delta_unsent"
+            } else requested
             if (key == "keep_unsent") {
                 unsentDeltaHookInstalled = "delta_unsent" in selected
                 unsentTextRenderHookInstalled = "unsent_indicator" in selected
@@ -382,7 +388,7 @@ val allowScreenshotPatch = controlPatch("allow_screenshot", "Allow screenshots",
 @Suppress("unused")
 val hideReadReceiptsPatch = controlPatch("hide_read_receipts", "Hide read receipts", "Stops sending read receipts. Opened encrypted chats can stay unread on this phone. Replying or switching this off may notify the sender. Group coverage isn't verified.", "Privacy", "hide_read_receipts", "read_mailbox")
 @Suppress("unused")
-val keepUnsentPatch = controlPatch("keep_unsent", "Unsent message history", "Saves a private local text snapshot from the render path, observes Messenger's model unsent flag for diagnostics, and keeps up to 30 recent notification-text snapshots as a fallback. Messenger's own behavior is unchanged. E2EE capture is verified only for Messenger 580 variant 346013370; Messenger 581 E2EE and media attachments are not yet implemented or verified.", "Privacy", "keep_unsent", "unsent_indicator", "delta_unsent")
+val keepUnsentPatch = controlPatch("keep_unsent", "Unsent message history", "Saves a private local text snapshot from the render path, observes Messenger's model unsent flag for diagnostics where that optional hook exists, and keeps up to 30 recent notification-text snapshots as a fallback. Messenger's own behavior is unchanged. E2EE capture is verified only for Messenger 580 variant 346013370; Messenger 581 E2EE and media attachments are not yet implemented or verified.", "Privacy", "keep_unsent", "unsent_indicator", "delta_unsent")
 private var anonymousStoriesApplied = false
 
 private val anonymousStoriesResources = resourcePatch(description = "Record HushMessenger capability: anonymous_stories") {
