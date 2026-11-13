@@ -61,9 +61,26 @@ public class UnsentDiagnosticsTest {
         JSONObject report = new JSONObject(UnsentDiagnostics.report(context));
         String json = report.toString();
         assertTrue(json.contains("object.shape"));
-        assertTrue("Diagnostic report did not export object shape: " + json,
-            json.contains("Lx/Downloader;"));
-        assertTrue(json.contains("A07:Lx/Metadata;=set"));
+
+        // Inspect decoded JSON values rather than searching serialized JSON text.
+        // Android's JSON writer may escape '/' as '\\/', so raw substring checks are not portable.
+        boolean foundDownloaderShape = false;
+        boolean foundMetadataField = false;
+        org.json.JSONArray events = report.getJSONArray("events");
+        for (int i = 0; i < events.length(); i++) {
+            JSONObject event = events.getJSONObject(i);
+            if (!"object.shape".equals(event.optString("stage"))) continue;
+            String detail = event.optString("detail");
+            if ("downloader".equals(event.optString("result")) &&
+                    detail.startsWith("Lx/Downloader;")) {
+                foundDownloaderShape = true;
+                foundMetadataField = detail.contains("A07:Lx/Metadata;=set");
+            }
+        }
+        assertTrue("Downloader object shape missing from decoded event details: " + json,
+            foundDownloaderShape);
+        assertTrue("Downloader metadata field missing from decoded event details: " + json,
+            foundMetadataField);
         assertFalse(json.contains("private-message-id"));
     }
 
