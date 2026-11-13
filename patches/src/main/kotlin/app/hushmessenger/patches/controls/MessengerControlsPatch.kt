@@ -251,6 +251,14 @@ private fun controlPatch(
                 deleting.validateE2eeDeleteCapture()
                 incoming to deleting
             } else null
+            // The receive worker runs in :background_e2ee, separate from the main-process SettingsProvider.
+            // Validate MessengerApplication.onCreate so its process-local Settings context exists before receive hooks.
+            val messenger581ProcessInitialization = if (key == "keep_unsent" && packageMetadata.versionCode == "346213510") {
+                mutableClassDefBy("Lcom/facebook/messenger/app/MessengerApplication;").methods.singleOrNull { method ->
+                    method.name == "onCreate" && method.returnType == "V" && method.parameterTypes.isEmpty()
+                }?.also { it.validateMessenger581ApplicationInitialization() }
+                    ?: throw PatchException("Keep unsent: Messenger 581 Application initializer is missing")
+            } else null
             // Messenger 581 uses a newer QPL message-model route and a separate Armadillo media
             // completion callback. Validate the complete reflection/metadata contract before editing.
             val messenger581MessageCapture = if (key == "keep_unsent" && packageMetadata.versionCode == "346213510") {
@@ -343,6 +351,7 @@ private fun controlPatch(
                 nativeRoutesApplied = nativeBubbleRoutesVerified
             } else {
                 injectControl(key, methods)
+                messenger581ProcessInitialization?.injectMessenger581ApplicationInitialization()
                 e2eeUnsend?.let { (incoming, deleting) ->
                     incoming.injectE2eeIncomingCapture()
                     deleting.injectE2eeDeleteCapture()
