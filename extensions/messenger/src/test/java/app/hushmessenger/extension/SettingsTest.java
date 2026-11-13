@@ -24,6 +24,7 @@ import static org.junit.Assert.*;
 public class SettingsTest {
     @Before public void reset() {
         Settings.initialize(RuntimeEnvironment.getApplication());
+        UnsentDiagnostics.clearForTests(RuntimeEnvironment.getApplication());
         Settings.preferences.edit().clear().commit();
         AntiUnsendStore.get(RuntimeEnvironment.getApplication()).clearForTests();
         Settings.hookErrors.clear();
