@@ -28,7 +28,7 @@ public final class SettingsProvider extends ContentProvider {
         if (CALL_RECORD_UNSENT_DEBUG.equals(method)) {
             Bundle result = new Bundle();
             boolean accepted = extras != null && UnsentDiagnostics.recordFromProvider(
-                extras.getString("stage"), extras.getString("result"));
+                extras.getString("stage"), extras.getString("result"), extras.getString("detail"));
             result.putBoolean("accepted", accepted);
             return result;
         }
