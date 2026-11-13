@@ -122,6 +122,39 @@ internal fun Document.addFeature(key: String) {
     })
 }
 
+internal fun Document.addUnsentDebugMetadata(
+    e2eeCapture: Boolean,
+    deltaHook: Boolean,
+    textRenderHook: Boolean,
+    notificationSites: Int,
+    parserSites: Int,
+    nativeParserSites: Int,
+    revokeSites: Int,
+    mediaSites: Int,
+) {
+    val application = getElementsByTagName("application").item(0) as Element
+    val values = listOf(
+        "hush.unsent.e2ee_capture_hook" to e2eeCapture.toString(),
+        "hush.unsent.delta_hook" to deltaHook.toString(),
+        "hush.unsent.text_render_hook" to textRenderHook.toString(),
+        "hush.unsent.notification_hook_sites" to notificationSites.toString(),
+        "hush.unsent.message_parser_hook_sites" to parserSites.toString(),
+        "hush.unsent.native_parser_hook_sites" to nativeParserSites.toString(),
+        "hush.unsent.revoke_hook_sites" to revokeSites.toString(),
+        "hush.unsent.media_capture_hook_sites" to mediaSites.toString(),
+    )
+    for ((name, value) in values) {
+        val metadata = application.getElementsByTagName("meta-data")
+        if ((0 until metadata.length).any { (metadata.item(it) as Element).getAttribute("android:name") == name }) {
+            throw PatchException("HushMessenger: $name is already installed. Start with the stock APK.")
+        }
+        application.appendChild(createElement("meta-data").apply {
+            setAttribute("android:name", name)
+            setAttribute("android:value", value)
+        })
+    }
+}
+
 internal fun injectControl(key: String, methods: Map<String, List<MutableMethod>>) {
     // A multi-method control must pass every contract before its first edit.
     for ((hook, selectedMethods) in methods) for (method in selectedMethods) {
@@ -195,16 +228,44 @@ private fun controlPatch(
 ): BytecodePatch {
     var applied = false
     var nativeRoutesApplied = false
+    var unsentE2eeHookInstalled = false
+    var unsentDeltaHookInstalled = false
+    var unsentTextRenderHookInstalled = false
+    var unsentNotificationHookSites = 0
+    var unsentMessageParserHookSites = 0
+    var unsentNativeParserHookSites = 0
+    var unsentRevokeHookSites = 0
+    var unsentMediaCaptureHookSites = 0
     val featureResources = resourcePatch(description = "Record HushMessenger capability: $key") {
         dependsOn(settingsResources)
         execute {
             applied = false
             nativeRoutesApplied = false
+            unsentE2eeHookInstalled = false
+            unsentDeltaHookInstalled = false
+            unsentTextRenderHookInstalled = false
+            unsentNotificationHookSites = 0
+            unsentMessageParserHookSites = 0
+            unsentNativeParserHookSites = 0
+            unsentRevokeHookSites = 0
+            unsentMediaCaptureHookSites = 0
             document("AndroidManifest.xml").use { it.requireFeatureAbsent(key) }
         }
         finalize {
             if (applied) document("AndroidManifest.xml").use {
                 it.addFeature(key)
+                if (key == "keep_unsent") {
+                    it.addUnsentDebugMetadata(
+                        unsentE2eeHookInstalled,
+                        unsentDeltaHookInstalled,
+                        unsentTextRenderHookInstalled,
+                        unsentNotificationHookSites,
+                        unsentMessageParserHookSites,
+                        unsentNativeParserHookSites,
+                        unsentRevokeHookSites,
+                        unsentMediaCaptureHookSites,
+                    )
+                }
                 if (nativeRoutesApplied) it.addNativeBubbleRoutesMetadata()
             }
         }
@@ -218,7 +279,14 @@ private fun controlPatch(
         compatibleWith(compatibility)
         dependsOn(settingsExtension, featureResources)
         execute {
-            val selected = hooks.toSet().ifEmpty { setOf(key) }
+            val requested = hooks.toSet().ifEmpty { setOf(key) }
+            // delta_unsent is optional on checked profiles; its absence must not block other capture routes.
+            val selected = if (key == "keep_unsent" && "delta_unsent" in requested &&
+                discoveredControls["delta_unsent"].isNullOrEmpty()) requested - "delta_unsent" else requested
+            if (key == "keep_unsent") {
+                unsentDeltaHookInstalled = "delta_unsent" in selected
+                unsentTextRenderHookInstalled = "unsent_indicator" in selected
+            }
             validateControls(discoveredControls, selected)
             val methods = selected.associateWith { hook ->
                 discoveredControls.getValue(hook).map { original ->
@@ -328,6 +396,15 @@ private fun controlPatch(
                 }
                 callback
             } else null
+            if (key == "keep_unsent") {
+                unsentE2eeHookInstalled = e2eeUnsend != null ||
+                    (messenger581MessageCapture != null && messenger581Revoke != null)
+                unsentMessageParserHookSites = if (messenger581MessageCapture != null) 1 else 0
+                unsentNativeParserHookSites = if (messenger581NativeMessageCapture != null) 1 else 0
+                unsentRevokeHookSites = (if (e2eeUnsend != null) 1 else 0) +
+                    (if (messenger581Revoke != null) 1 else 0)
+                unsentMediaCaptureHookSites = if (messenger581ImageCapture != null) 1 else 0
+            }
             if (key == COMMUNITY_INBOX) {
                 val contract = communityInboxContract ?: throw PatchException("Messenger controls: the native community inbox route is missing")
                 val host = mutableClassDefBy(HOST_SCREENS)
@@ -368,10 +445,12 @@ private fun controlPatch(
                 messenger581Revoke?.injectE2eeDeleteCapture(messenger581 = true)
                 messenger581ImageCapture?.injectDownloadedImageCapture()
                 if (key == "keep_unsent") {
+                    var sites = 0
                     notificationCaptureMethods.forEach { (className, methodId) ->
-                        mutableClassDefBy(className).methods.single { it.hookId() == methodId }
+                        sites += mutableClassDefBy(className).methods.single { it.hookId() == methodId }
                             .injectNotificationCapture()
                     }
+                    unsentNotificationHookSites = sites
                 }
             }
             recordControl(key)
