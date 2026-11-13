@@ -527,12 +527,17 @@ public final class Settings {
      * Cache the text for local history, but never alter what Messenger renders.
      */
     public static String labelKeptUnsent(String text, String messageId) {
-        boolean active = wouldUse("keep_unsent");
-        UnsentDiagnostics.record(appContext, "hook.render_text",
-                text == null ? "null" : (active ? "enabled" : "disabled"));
-        if (active && text != null && !text.isEmpty()) {
-            captureIncomingMessage(messageId, text);
+        if (text == null) {
+            UnsentDiagnostics.record(appContext, "hook.render_text", "null");
+            return null;
         }
+        if (text.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "hook.render_text", "empty_text");
+            return text;
+        }
+        boolean active = wouldUse("keep_unsent");
+        UnsentDiagnostics.record(appContext, "hook.render_text", active ? "enabled" : "disabled");
+        if (active) captureIncomingMessage(messageId, text);
         return text;
     }
 
