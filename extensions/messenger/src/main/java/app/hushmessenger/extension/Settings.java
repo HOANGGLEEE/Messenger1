@@ -54,7 +54,8 @@ public final class Settings {
         features.addAll(bundled(HostScreens.bundledControls()));
         installed = Collections.unmodifiableSet(features);
         // Set last: a hook that sees preferences also sees the installed controls.
-        preferences = appContext.getSharedPreferences("hushmessenger", Context.MODE_PRIVATE);
+        // MODE_MULTI_PROCESS is a best-effort fallback for Root Mount builds without the main-process provider.
+        preferences = appContext.getSharedPreferences("hushmessenger", Context.MODE_PRIVATE | Context.MODE_MULTI_PROCESS);
     }
 
     static Set<String> bundled(String list) {
