@@ -42,6 +42,8 @@ Start-Sleep -Milliseconds 700
 @(& $adbPath shell ps -A | Select-String -Pattern 'com\.facebook\.orca') |
     Out-File -FilePath $beforeFile -Encoding UTF8
 
+# Remove only the previous exported diagnostics file so ADB cannot pull a stale report.
+& $adbPath shell rm -f /sdcard/Download/HushMessenger-Unsend-Diagnostics.json
 Write-Host 'Clearing old logcat entries. This does not clear Messenger data.'
 & $adbPath logcat -c
 
