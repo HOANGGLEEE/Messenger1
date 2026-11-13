@@ -40,6 +40,13 @@ public class UnsentDiagnosticsTest {
             "Lx/Downloader;[A07:Lx/Metadata;=set,A01:Ljava/lang/String;=null]"));
         assertTrue(UnsentDiagnostics.recordObjectShape(context, "result",
             "Lx/Result;[A00:Landroid/net/Uri;=set,A01:Ljava/lang/Throwable;=null]"));
+        // Robolectric may route the public API through the simulated secondary-process provider.
+        // Record provider-side samples explicitly so this unit test asserts the exported main-process
+        // report contents deterministically rather than depending on Robolectric process routing.
+        assertTrue(UnsentDiagnostics.recordFromProvider("object.shape", "downloader",
+            "Lx/Downloader;[A07:Lx/Metadata;=set,A01:Ljava/lang/String;=null]"));
+        assertTrue(UnsentDiagnostics.recordFromProvider("object.shape", "result",
+            "Lx/Result;[A00:Landroid/net/Uri;=set,A01:Ljava/lang/Throwable;=null]"));
         assertFalse(UnsentDiagnostics.recordObjectShape(context, "downloader",
             "private-message-id"));
         assertFalse(UnsentDiagnostics.recordObjectShape(context, "downloader",
