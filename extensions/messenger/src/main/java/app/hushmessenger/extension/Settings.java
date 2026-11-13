@@ -56,6 +56,8 @@ public final class Settings {
         // Set last: a hook that sees preferences also sees the installed controls.
         // MODE_MULTI_PROCESS is a best-effort fallback for Root Mount builds without the main-process provider.
         preferences = appContext.getSharedPreferences("hushmessenger", Context.MODE_PRIVATE | Context.MODE_MULTI_PROCESS);
+        UnsentDiagnostics.record(appContext, "runtime.initialize", "ok");
+        UnsentDiagnostics.record(appContext, "feature.keep_unsent", installed.contains("keep_unsent") ? "installed" : "not_installed");
     }
 
     static Set<String> bundled(String list) {
@@ -244,6 +246,9 @@ public final class Settings {
     }
     public static boolean hideReadReceipts() { return enabled("hide_read_receipts"); }
     public static boolean keepUnsent() { return wouldUse("keep_unsent"); }
+    public static void noteUnsentIntentHook(boolean active) {
+        UnsentDiagnostics.record(appContext, "hook.intent", active ? "enabled" : "disabled");
+    }
     public static boolean viewStoriesAnonymously() { return enabled("anonymous_stories"); }
     public static boolean saveAnyStory() { return enabled("save_stories"); }
 
@@ -339,7 +344,12 @@ public final class Settings {
 
     /** Counts entry into Messenger 581's protobuf parser, before its success/fallback branches. */
     public static void noteMessageModelParserEntry() {
-        if (wouldUse("keep_unsent")) incrementUnsentCounter(UNSENT_MODEL_PARSER_ENTRIES);
+        UnsentDiagnostics.record(appContext, "parser.entry", "entered");
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "parser.skip", "disabled");
+            return;
+        }
+        incrementUnsentCounter(UNSENT_MODEL_PARSER_ENTRIES);
     }
 
     static long unsentModelParserEntries() {
@@ -447,13 +457,24 @@ public final class Settings {
      * bundles do not reliably expose Messenger message IDs, so these rows are never marked unsent.
      */
     public static void captureNotification(Notification notification) {
-        if (notification == null || !wouldUse("keep_unsent")) return;
+        UnsentDiagnostics.record(appContext, "notification.callback", notification == null ? "null" : "entered");
+        if (notification == null) return;
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "notification.skip", "disabled");
+            return;
+        }
         incrementUnsentCounter(UNSENT_NOTIFICATION_HITS);
         Context context = appContext;
-        if (context == null) return;
+        if (context == null) {
+            UnsentDiagnostics.record(appContext, "notification.skip", "no_context");
+            return;
+        }
         try {
             Bundle extras = notification.extras;
-            if (extras == null) return;
+            if (extras == null) {
+                UnsentDiagnostics.record(appContext, "notification.skip", "no_extras");
+                return;
+            }
             String title = notificationText(extras,
                 "android.conversationTitle", "android.title.big", "android.title",
                 "android.hiddenConversationTitle");
@@ -475,7 +496,10 @@ public final class Settings {
                         store.captureNotification(title, body, fallbackTime)) saved = 1;
             }
             for (int i = 0; i < saved; i++) incrementUnsentCounter(UNSENT_NOTIFICATION_SAVED);
+            UnsentDiagnostics.record(appContext, "notification.save", saved > 0 ? "saved" : "not_saved");
+            if (saved == 0) UnsentDiagnostics.record(appContext, "notification.skip", "no_payload");
         } catch (RuntimeException error) {
+            UnsentDiagnostics.record(appContext, "notification.save", "db_error");
             hookFailedPrivately("keep_unsent", "Can't cache notification text", error);
         }
     }
@@ -487,20 +511,32 @@ public final class Settings {
      */
     public static void captureIncomingMessage(String messageId, String threadId, String senderId,
             String text, long messageTimestamp) {
-        if (messageId == null || messageId.isEmpty() || !wouldUse("keep_unsent")) return;
+        UnsentDiagnostics.record(appContext, "capture.callback", "entered");
+        if (messageId == null || messageId.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "capture.skip", "missing_id");
+            return;
+        }
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "capture.skip", "disabled");
+            return;
+        }
         incrementUnsentCounter(UNSENT_CAPTURE_HITS);
         Context context = appContext;
-        if (context == null) return;
+        if (context == null) {
+            UnsentDiagnostics.record(appContext, "capture.save", "no_context");
+            return;
+        }
         try {
             AntiUnsendStore store = AntiUnsendStore.get(context);
             long now = System.currentTimeMillis();
-            // Keep an ID/thread/timestamp row even for photo-only messages with no text body.
             store.captureMessageMetadata(messageId, threadId, senderId, messageTimestamp, now);
             if (text != null && !text.isEmpty()) {
                 store.captureText(messageId, threadId, senderId, text, messageTimestamp, now);
             }
             incrementUnsentCounter(UNSENT_CAPTURE_SAVED);
+            UnsentDiagnostics.record(appContext, "capture.save", "ok");
         } catch (RuntimeException error) {
+            UnsentDiagnostics.record(appContext, "capture.save", "db_error");
             hookFailedPrivately("keep_unsent", "Can't cache incoming message metadata", error);
         }
     }
@@ -574,18 +610,25 @@ public final class Settings {
      * state. The model exposes message_id/thread_key/is_unsent and its nested image metadata.
      */
     public static void captureIncomingQpl(Object qpl) {
-        if (!wouldUse("keep_unsent")) return;
+        UnsentDiagnostics.record(appContext, "model.callback", "entered");
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "model.skip", "disabled");
+            return;
+        }
         incrementUnsentCounter(UNSENT_MODEL_HOOK_HITS);
-        if (qpl == null) return;
+        if (qpl == null) {
+            UnsentDiagnostics.record(appContext, "model.skip", "null");
+            return;
+        }
         String messageId = messageModelString(qpl, "A0I");
         if (messageId == null || messageId.isEmpty()) {
             incrementUnsentCounter(UNSENT_MODEL_ID_MISSING);
+            UnsentDiagnostics.record(appContext, "model.skip", "missing_id");
             return;
         }
         String threadKey = messageModelString(qpl, "A0L");
         String senderId = messageModelString(qpl, "A0K");
         long messageTimestamp = messageModelLong(qpl, "A0M");
-
         Object content = invokeModelGetter(qpl, "A0B");
         Object messageContent = invokeModelGetter(content, "A01");
         Object textValue = readMessageModelValue(messageContent, "BOa", MESSAGE_MODEL_TEXT);
@@ -593,6 +636,7 @@ public final class Settings {
         captureIncomingMessage(messageId, threadKey, senderId, body, messageTimestamp);
 
         Context context = appContext;
+        int linkedImages = 0;
         if (context != null && messageContent != null) {
             try {
                 Object imageContainer = invokeModelGetter(messageContent, "A03");
@@ -601,31 +645,33 @@ public final class Settings {
                     AntiUnsendStore store = AntiUnsendStore.get(context);
                     long now = System.currentTimeMillis();
                     for (Object image : (Iterable<?>) imageRows) {
-                        String directPath = (String) readMessageModelValue(
-                            image, "BOa", MESSAGE_MODEL_DIRECT_PATH);
-                        String mimeType = (String) readMessageModelValue(
-                            image, "BOa", MESSAGE_MODEL_DIRECT_PATH_MIME);
-                        Object rawTimestamp = readMessageModelValue(
-                            image, "Akr", MESSAGE_MODEL_MEDIA_KEY_TIMESTAMP);
-                        long mediaKeyTimestamp = rawTimestamp instanceof Number
-                            ? ((Number) rawTimestamp).longValue() : 0;
+                        String directPath = (String) readMessageModelValue(image, "BOa", MESSAGE_MODEL_DIRECT_PATH);
+                        String mimeType = (String) readMessageModelValue(image, "BOa", MESSAGE_MODEL_DIRECT_PATH_MIME);
+                        Object rawTimestamp = readMessageModelValue(image, "Akr", MESSAGE_MODEL_MEDIA_KEY_TIMESTAMP);
+                        long mediaKeyTimestamp = rawTimestamp instanceof Number ? ((Number) rawTimestamp).longValue() : 0;
                         if (directPath == null || directPath.isEmpty() || mimeType == null ||
                                 !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) continue;
                         store.captureMediaMetadataForMessage(directPath, messageId, threadKey,
                             mediaKeyTimestamp, mimeType, now);
+                        linkedImages++;
                     }
                 }
             } catch (Exception error) {
+                UnsentDiagnostics.record(appContext, "model.skip", "db_error");
                 hookFailedPrivately("keep_unsent", "Can't link image metadata to the message", error);
             }
+        } else {
+            UnsentDiagnostics.record(appContext, "model.skip", "no_context");
         }
-
+        UnsentDiagnostics.record(appContext, "model.media_metadata", linkedImages > 0 ? "linked" : "no_images");
         Object unsentValue = readMessageModelValue(qpl, "Akp", MESSAGE_MODEL_IS_UNSENT);
+        UnsentDiagnostics.record(appContext, "model.unsent_flag", Boolean.TRUE.equals(unsentValue) ? "true" : "false");
         if (Boolean.TRUE.equals(unsentValue) && !isKeptUnsent(messageId)) {
             Object rawUnsentAt = readMessageModelValue(qpl, "Akr", MESSAGE_MODEL_UNSENT_TIMESTAMP);
             long unsentAt = rawUnsentAt instanceof Number ? ((Number) rawUnsentAt).longValue() : 0;
             recordUnsent(messageId, unsentAt);
         }
+        UnsentDiagnostics.record(appContext, "model.callback", "ok");
     }
 
     /**
@@ -634,37 +680,53 @@ public final class Settings {
      * A0F(directPath) helper Messenger itself uses in this callback.
      */
     public static void captureDownloadedImageFromCallback(Object downloader, Object result) {
-        if (!wouldUse("keep_unsent")) return;
+        UnsentDiagnostics.record(appContext, "media.callback", "entered");
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "media.skip", "disabled");
+            return;
+        }
         incrementUnsentCounter(UNSENT_MEDIA_CALLBACK_HITS);
-        if (downloader == null || result == null) return;
+        if (downloader == null || result == null) {
+            UnsentDiagnostics.record(appContext, "media.skip", "missing_uri");
+            return;
+        }
         try {
             Object resultUri = readDeclaredField(result, "A00");
             Object resultError = readDeclaredField(result, "A01");
-            if (!(resultUri instanceof Uri) || resultError != null) return;
-
-            // Messenger's own callback resolves the completed local file from resultUri.getPath().
-            // The metadata directPath is an archive key, not the local filesystem path.
+            if (!(resultUri instanceof Uri) || resultError != null) {
+                UnsentDiagnostics.record(appContext, "media.skip", resultError != null ? "failed" : "missing_uri");
+                return;
+            }
             String localPath = ((Uri) resultUri).getPath();
-            if (localPath == null || localPath.isEmpty()) return;
-
+            if (localPath == null || localPath.isEmpty()) {
+                UnsentDiagnostics.record(appContext, "media.skip", "missing_file");
+                return;
+            }
             Object metadata = readDeclaredField(downloader, "A07");
-            if (metadata == null) return;
+            if (metadata == null) {
+                UnsentDiagnostics.record(appContext, "media.skip", "missing_metadata");
+                return;
+            }
             Object directPath = readDeclaredField(metadata, "A07");
             Object mime = readDeclaredField(metadata, "A06");
             Object timestamp = readDeclaredField(metadata, "A03");
-            if (!(directPath instanceof String) || !(mime instanceof String) ||
-                    !(timestamp instanceof Number)) return;
-
+            if (!(directPath instanceof String) || !(mime instanceof String) || !(timestamp instanceof Number)) {
+                UnsentDiagnostics.record(appContext, "media.skip", "missing_metadata");
+                return;
+            }
             ClassLoader loader = downloader.getClass().getClassLoader();
             Class<?> fileHelper = Class.forName("X.001", false, loader);
             java.lang.reflect.Method resolver = fileHelper.getDeclaredMethod("A0F", String.class);
             resolver.setAccessible(true);
             Object resolvedFile = resolver.invoke(null, localPath);
-            if (!(resolvedFile instanceof File)) return;
-
+            if (!(resolvedFile instanceof File)) {
+                UnsentDiagnostics.record(appContext, "media.skip", "missing_file");
+                return;
+            }
             captureDownloadedImage((String) directPath, (String) mime,
                 ((Number) timestamp).longValue(), ((File) resolvedFile).getAbsolutePath());
         } catch (Exception error) {
+            UnsentDiagnostics.record(appContext, "media.save", "db_error");
             hookFailedPrivately("keep_unsent", "Can't inspect completed image download", error);
         }
     }
@@ -685,27 +747,53 @@ public final class Settings {
 
     public static void captureDownloadedImage(String directPath, String mimeType,
             long mediaKeyTimestamp, String sourcePath) {
-        if (!wouldUse("keep_unsent") || directPath == null || directPath.isEmpty() ||
-                mimeType == null || !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/") ||
-                sourcePath == null || sourcePath.isEmpty()) return;
+        UnsentDiagnostics.record(appContext, "media.capture", "entered");
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "media.skip", "disabled");
+            return;
+        }
+        if (directPath == null || directPath.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "media.skip", "missing_metadata");
+            return;
+        }
+        if (mimeType == null || !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) {
+            UnsentDiagnostics.record(appContext, "media.skip", "not_image");
+            return;
+        }
+        if (sourcePath == null || sourcePath.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "media.skip", "missing_file");
+            return;
+        }
         incrementUnsentCounter(UNSENT_MEDIA_HITS);
         Context context = appContext;
-        if (context == null) return;
+        if (context == null) {
+            UnsentDiagnostics.record(appContext, "media.skip", "no_context");
+            return;
+        }
         synchronized (UNSENT_MEDIA_ARCHIVE_LOCK) {
             File temporary = null;
             try {
                 File source = new File(sourcePath);
                 long sourceLength = source.length();
-                if (!source.isFile() || !source.canRead() || sourceLength <= 0 ||
-                        sourceLength > MAX_UNSENT_IMAGE_BYTES) return;
-                if (!hasImageFileSignature(source, mimeType)) return;
-
+                if (!source.isFile() || !source.canRead() || sourceLength <= 0) {
+                    UnsentDiagnostics.record(appContext, "media.skip", "unreadable");
+                    return;
+                }
+                if (sourceLength > MAX_UNSENT_IMAGE_BYTES) {
+                    UnsentDiagnostics.record(appContext, "media.skip", "too_large");
+                    return;
+                }
+                if (!hasImageFileSignature(source, mimeType)) {
+                    UnsentDiagnostics.record(appContext, "media.skip", "bad_signature");
+                    return;
+                }
                 String key = AntiUnsendStore.mediaKey(directPath, mediaKeyTimestamp);
-                if (key == null) return;
+                if (key == null) {
+                    UnsentDiagnostics.record(appContext, "media.skip", "missing_metadata");
+                    return;
+                }
                 AntiUnsendStore store = AntiUnsendStore.get(context);
-                store.captureMediaMetadata(directPath, mediaKeyTimestamp, mimeType,
-                    System.currentTimeMillis());
-
+                store.captureMediaMetadata(directPath, mediaKeyTimestamp, mimeType, System.currentTimeMillis());
                 File directory = new File(context.getFilesDir(), "hush_unsent_media");
                 if (!directory.isDirectory() && !directory.mkdirs()) {
                     throw new java.io.IOException("Can't create private media directory");
@@ -715,25 +803,20 @@ public final class Settings {
                 if (destination.isFile() && destination.length() > 0) {
                     if (hasImageFileSignature(destination, mimeType)) {
                         String destinationPath = destination.getAbsolutePath();
-                        boolean alreadyLinked = destinationPath.equals(
-                            store.mediaLocalPath(directPath, mediaKeyTimestamp));
-                        if (store.saveMediaFile(directPath, mediaKeyTimestamp,
-                                destinationPath, System.currentTimeMillis())) {
+                        boolean alreadyLinked = destinationPath.equals(store.mediaLocalPath(directPath, mediaKeyTimestamp));
+                        if (store.saveMediaFile(directPath, mediaKeyTimestamp, destinationPath, System.currentTimeMillis())) {
                             if (!alreadyLinked) incrementUnsentCounter(UNSENT_MEDIA_SAVED);
+                            UnsentDiagnostics.record(appContext, "media.save", alreadyLinked ? "duplicate" : "saved");
                         } else {
                             destination.delete();
+                            UnsentDiagnostics.record(appContext, "media.save", "not_saved");
                         }
                         return;
                     }
-                    if (!destination.delete()) {
-                        throw new java.io.IOException("Can't replace invalid archived image");
-                    }
+                    if (!destination.delete()) throw new java.io.IOException("Can't replace invalid archived image");
                 }
-
                 temporary = new File(directory, key + ".tmp");
-                if (temporary.exists() && !temporary.delete()) {
-                    throw new java.io.IOException("Can't replace temporary image");
-                }
+                if (temporary.exists() && !temporary.delete()) throw new java.io.IOException("Can't replace temporary image");
                 long copied = 0;
                 byte[] buffer = new byte[16 * 1024];
                 try (FileInputStream input = new FileInputStream(source);
@@ -741,32 +824,26 @@ public final class Settings {
                     int count;
                     while ((count = input.read(buffer)) != -1) {
                         copied += count;
-                        if (copied > MAX_UNSENT_IMAGE_BYTES) {
-                            throw new java.io.IOException("Image exceeds local archive limit");
-                        }
+                        if (copied > MAX_UNSENT_IMAGE_BYTES) throw new java.io.IOException("Image exceeds local archive limit");
                         output.write(buffer, 0, count);
                     }
                     output.flush();
                     output.getFD().sync();
                 }
-                if (copied != sourceLength || copied == 0) {
-                    throw new java.io.IOException("Downloaded image changed while being copied");
-                }
-                if (destination.exists() && !destination.delete()) {
-                    throw new java.io.IOException("Can't replace archived image");
-                }
-                if (!temporary.renameTo(destination)) {
-                    throw new java.io.IOException("Can't move image into private storage");
-                }
+                if (copied != sourceLength || copied == 0) throw new java.io.IOException("Downloaded image changed while being copied");
+                if (destination.exists() && !destination.delete()) throw new java.io.IOException("Can't replace archived image");
+                if (!temporary.renameTo(destination)) throw new java.io.IOException("Can't move image into private storage");
                 temporary = null;
-                if (!store.saveMediaFile(directPath, mediaKeyTimestamp,
-                        destination.getAbsolutePath(), System.currentTimeMillis())) {
+                if (!store.saveMediaFile(directPath, mediaKeyTimestamp, destination.getAbsolutePath(), System.currentTimeMillis())) {
                     destination.delete();
+                    UnsentDiagnostics.record(appContext, "media.save", "not_saved");
                     return;
                 }
                 incrementUnsentCounter(UNSENT_MEDIA_SAVED);
+                UnsentDiagnostics.record(appContext, "media.save", "saved");
             } catch (Exception error) {
                 if (temporary != null) temporary.delete();
+                UnsentDiagnostics.record(appContext, "media.save", "db_error");
                 hookFailedPrivately("keep_unsent", "Can't save downloaded image for local history", error);
             }
         }
@@ -841,20 +918,36 @@ public final class Settings {
     }
 
     public static synchronized void recordUnsent(String messageId, long unsentAt) {
-        if (messageId == null || messageId.isEmpty() || !wouldUse("keep_unsent")) return;
+        UnsentDiagnostics.record(appContext, "revoke.callback", "entered");
+        if (messageId == null || messageId.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "revoke.skip", "missing_id");
+            return;
+        }
+        if (!wouldUse("keep_unsent")) {
+            UnsentDiagnostics.record(appContext, "revoke.skip", "disabled");
+            return;
+        }
         long eventTime = unsentAt > 0 ? unsentAt : System.currentTimeMillis();
         incrementUnsentCounter(UNSENT_REVOKE_HITS);
         SharedPreferences prefs = preferences;
-        if (prefs == null) return;
+        if (prefs == null) {
+            UnsentDiagnostics.record(appContext, "revoke.skip", "no_preferences");
+            return;
+        }
         Set<String> ids = new HashSet<>(prefs.getStringSet(KEPT_UNSENT_KEY, Collections.emptySet()));
         if (ids.add(messageId)) prefs.edit().putStringSet(KEPT_UNSENT_KEY, ids).apply();
         Context context = appContext;
-        if (context != null) try {
-            AntiUnsendStore.get(context).markUnsent(messageId, eventTime);
-            incrementUnsentCounter(UNSENT_REVOKE_SAVED);
-        } catch (RuntimeException error) {
-            // The legacy SharedPreferences marker remains the fallback; database failure must never crash Messenger.
-            hookFailedPrivately("keep_unsent", "Can't record unsent message history", error);
+        if (context != null) {
+            try {
+                AntiUnsendStore.get(context).markUnsent(messageId, eventTime);
+                incrementUnsentCounter(UNSENT_REVOKE_SAVED);
+                UnsentDiagnostics.record(appContext, "revoke.save", "ok");
+            } catch (RuntimeException error) {
+                UnsentDiagnostics.record(appContext, "revoke.save", "db_error");
+                hookFailedPrivately("keep_unsent", "Can't record unsent message history", error);
+            }
+        } else {
+            UnsentDiagnostics.record(appContext, "revoke.skip", "no_context");
         }
         activeAt.put("keep_unsent", System.currentTimeMillis());
     }
@@ -891,14 +984,23 @@ public final class Settings {
      * Cache the text for local history, but never alter what Messenger renders.
      */
     public static String labelKeptUnsent(String text, String messageId) {
-        if (wouldUse("keep_unsent") && text != null && !text.isEmpty()) {
-            captureIncomingMessage(messageId, text);
+        if (text == null) {
+            UnsentDiagnostics.record(appContext, "hook.render_text", "null");
+            return null;
         }
+        if (text.isEmpty()) {
+            UnsentDiagnostics.record(appContext, "hook.render_text", "empty_text");
+            return text;
+        }
+        boolean active = wouldUse("keep_unsent");
+        UnsentDiagnostics.record(appContext, "hook.render_text", active ? "enabled" : "disabled");
+        if (active) captureIncomingMessage(messageId, text);
         return text;
     }
 
     /** History-only mode never changes Messenger's own unsent state. */
     public static boolean suppressUnsent(boolean original, String messageId) {
+        UnsentDiagnostics.record(appContext, "hook.delta_unsent", original ? "true" : "false");
         // This is Messenger's own per-message unsent predicate. Observe true values to mark
         // the local archive, but always return the original value so Messenger behaves normally.
         if (original) recordUnsent(messageId);
