@@ -205,6 +205,9 @@ final class SettingsText {
         ENGLISH.put("unsent_history_help", "Stored only on this device. Exact rows use a Messenger message ID. Notification fallback rows preserve recent notification text but are not called unsent because Android notifications do not reliably expose that ID.");
         ENGLISH.put("unsent_history_diagnostics", "Capture hook: %d, saved: %d • Revoke hook: %d, marked: %d");
         ENGLISH.put("unsent_history_notification_diagnostics", "Notification fallback: %d hooks, %d new snapshots");
+        ENGLISH.put("unsent_history_export_debug", "Export debug report");
+        ENGLISH.put("unsent_history_debug_saved", "Debug report saved");
+        ENGLISH.put("unsent_history_debug_failed", "Couldn't export the debug report.");
         ENGLISH.put("unsent_history_confirmed_section", "Matched unsent messages");
         ENGLISH.put("unsent_history_notification_section", "Recent notification snapshots");
         ENGLISH.put("unsent_history_notification_help", "Fallback copied before Messenger posts a notification. These rows can survive a later unsend, but they are not linked to a message ID.");
