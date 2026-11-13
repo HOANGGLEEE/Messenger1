@@ -46,4 +46,18 @@ public class UnsentDiagnosticsTest {
         assertFalse(UnsentDiagnostics.recordFromProvider("capture.callback", "arbitrary payload"));
         assertTrue(UnsentDiagnostics.recordFromProvider("revoke.save", "ok"));
     }
+
+    @Test public void mediaMetadataFailureReasonsRemainAllowListedAndPrivate() throws Exception {
+        assertTrue(UnsentDiagnostics.recordFromProvider("media.skip", "metadata_container_missing"));
+        assertTrue(UnsentDiagnostics.recordFromProvider("media.skip", "direct_path_missing"));
+        assertTrue(UnsentDiagnostics.recordFromProvider("media.skip", "mime_missing"));
+        assertTrue(UnsentDiagnostics.recordFromProvider("media.skip", "timestamp_missing"));
+        assertTrue(UnsentDiagnostics.recordFromProvider("media.skip", "metadata_type_mismatch"));
+
+        JSONObject report = new JSONObject(UnsentDiagnostics.report(context));
+        String json = report.toString();
+        assertTrue(json.contains("metadata_container_missing"));
+        assertTrue(json.contains("direct_path_missing"));
+        assertFalse(json.contains("private-message-id"));
+    }
 }
