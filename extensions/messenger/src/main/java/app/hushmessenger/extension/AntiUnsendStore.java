@@ -265,7 +265,8 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         if (messageId == null || messageId.isEmpty() || mediaKeyTimestamp <= 0 ||
                 mimeType == null || !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) return false;
         SQLiteDatabase db = getWritableDatabase();
-        if (hasOtherMessageMediaMetadata(db, messageId, mediaKeyTimestamp, mimeType)) return false;
+        if (hasAmbiguousMediaTimestamp(db, mediaKeyTimestamp, mimeType) ||
+                hasOtherMessageMediaMetadata(db, messageId, mediaKeyTimestamp, mimeType)) return false;
         String pendingKey = null;
         int matches = 0;
         try (Cursor cursor = db.query("media", new String[] {"media_key"},
@@ -355,7 +356,7 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         String exactLocalPath = null;
         String exactContentHash = null;
         int candidates = 0;
-        if (pendingCandidates == 0) {
+        if (pendingCandidates == 0 && !hasAmbiguousMediaTimestamp(db, mediaKeyTimestamp, mimeType)) {
             try (Cursor cursor = db.query("media", new String[] {"media_key", "local_path", "content_hash"},
                     "message_timestamp=? AND mime_type=? AND message_id IS NOT NULL AND message_id!=''",
                     new String[] {Long.toString(mediaKeyTimestamp), mimeType}, null, null,
@@ -451,6 +452,32 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         for (String key : keys) {
             db.update("media", ambiguous, "media_key=?", new String[] {key});
         }
+        if (!keys.isEmpty()) markMediaTimestampAmbiguous(db, mediaKeyTimestamp, mimeType, now);
+    }
+
+    private static boolean hasAmbiguousMediaTimestamp(SQLiteDatabase db, long mediaKeyTimestamp,
+            String mimeType) {
+        if (mediaKeyTimestamp <= 0 || mimeType == null) return false;
+        try (Cursor cursor = db.query("media", new String[] {"media_key"},
+                "message_timestamp=? AND mime_type=? AND message_id=''",
+                new String[] {Long.toString(mediaKeyTimestamp), mimeType}, null, null, null, "1")) {
+            return cursor.moveToFirst();
+        }
+    }
+
+    private static void markMediaTimestampAmbiguous(SQLiteDatabase db, long mediaKeyTimestamp,
+            String mimeType, long now) {
+        if (mediaKeyTimestamp <= 0 || mimeType == null) return;
+        String digest = mediaKey("ambiguous:" + mimeType, mediaKeyTimestamp);
+        if (digest == null) return;
+        ContentValues marker = new ContentValues();
+        marker.put("media_key", "ambiguous-" + digest);
+        marker.put("message_id", "");
+        marker.put("message_timestamp", mediaKeyTimestamp);
+        marker.put("mime_type", mimeType);
+        marker.put("received_at", now);
+        marker.put("last_seen_at", now);
+        db.insertWithOnConflict("media", null, marker, SQLiteDatabase.CONFLICT_IGNORE);
     }
 
     private static boolean hasSavedMediaForMessage(SQLiteDatabase db, String messageId,
