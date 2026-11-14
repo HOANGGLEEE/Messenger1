@@ -379,4 +379,35 @@ public class AntiUnsendStoreTest {
         }
     }
 
+
+    @Test public void lateTimestampCollisionInvalidatesAnEarlierFallbackLink() throws Exception {
+        long timestamp = 15001;
+        String mime = "image/jpeg";
+        String hash = "late-collision-hash";
+        String key = AntiUnsendStore.downloadedMediaKey(timestamp, mime, hash);
+        store.capturePendingDownloadedMedia(key, timestamp, mime, hash, 100);
+
+        java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getFilesDir(), "late-collision.jpg");
+        try {
+            assertTrue(image.createNewFile());
+            assertTrue(store.saveMediaFileByKey(key, image.getAbsolutePath(), hash, 105));
+            assertTrue(store.captureMediaMetadataForMessageWithoutDirectPath(
+                "m16", "thread-16", timestamp, mime, 110));
+            assertTrue(store.mediaIsLinked(key));
+
+            // A second message with the same timestamp/MIME makes the first fallback association ambiguous.
+            assertTrue(store.captureMediaMetadataForMessageWithoutDirectPath(
+                "m17", "thread-17", timestamp, mime, 115));
+            store.markUnsent("m16", 120);
+            store.markUnsent("m17", 121);
+
+            assertFalse(store.mediaIsLinked(key));
+            assertFalse(image.exists());
+            assertTrue(store.listUnsentMedia("m16").isEmpty());
+            assertTrue(store.listUnsentMedia("m17").isEmpty());
+        } finally {
+            image.delete();
+        }
+    }
+
 }
