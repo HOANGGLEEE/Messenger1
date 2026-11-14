@@ -657,17 +657,25 @@ public final class Settings {
                         Object rawDirectPath = readMessageModelValue(image, "BOa", MESSAGE_MODEL_DIRECT_PATH);
                         Object rawMimeType = readMessageModelValue(image, "BOa", MESSAGE_MODEL_DIRECT_PATH_MIME);
                         Object rawTimestamp = readMessageModelValue(image, "Akr", MESSAGE_MODEL_MEDIA_KEY_TIMESTAMP);
-                        if (!(rawDirectPath instanceof String) || ((String) rawDirectPath).isEmpty() ||
-                                !(rawMimeType instanceof String) ||
+                        if (!(rawMimeType instanceof String) ||
                                 !((String) rawMimeType).toLowerCase(java.util.Locale.ROOT).startsWith("image/")) {
                             UnsentDiagnostics.record(appContext, "model.skip", "metadata_type_mismatch");
                             continue;
                         }
                         long mediaKeyTimestamp = rawTimestamp instanceof Number
                             ? ((Number) rawTimestamp).longValue() : 0;
-                        store.captureMediaMetadataForMessage((String) rawDirectPath, messageId, threadKey,
-                            mediaKeyTimestamp, (String) rawMimeType, now);
-                        linkedImages++;
+                        if (mediaKeyTimestamp <= 0) {
+                            UnsentDiagnostics.record(appContext, "model.skip", "timestamp_missing");
+                            continue;
+                        }
+                        if (rawDirectPath instanceof String && !((String) rawDirectPath).isEmpty()) {
+                            store.captureMediaMetadataForMessage((String) rawDirectPath, messageId, threadKey,
+                                mediaKeyTimestamp, (String) rawMimeType, now);
+                            linkedImages++;
+                        } else if (store.captureMediaMetadataForMessageWithoutDirectPath(
+                                messageId, threadKey, mediaKeyTimestamp, (String) rawMimeType, now)) {
+                            linkedImages++;
+                        }
                     }
                 }
             } catch (Exception error) {
@@ -710,53 +718,79 @@ public final class Settings {
             Object resultUri = readDeclaredField(result, "A00");
             Object resultError = readDeclaredField(result, "A01");
             if (!(resultUri instanceof Uri) || resultError != null) {
-                UnsentDiagnostics.record(appContext, "media.skip", resultError != null ? "failed" : "missing_uri");
-                return;
-            }
-            String localPath = ((Uri) resultUri).getPath();
-            if (localPath == null || localPath.isEmpty()) {
-                UnsentDiagnostics.record(appContext, "media.skip", "missing_file");
+                UnsentDiagnostics.record(appContext, "media.skip",
+                    resultError != null ? "failed" : "missing_uri");
                 return;
             }
             if (metadata == null) {
                 UnsentDiagnostics.record(appContext, "media.skip", "metadata_container_missing");
                 return;
             }
-            // Messenger 581 maps client__e2ee_direct_path through Q1b.A06 -> RTh.A01 -> LX/8uu.A05.
-            // A07 is a different optional String field and is null on the tested image downloads.
-            Object directPath = readDeclaredField(metadata, "A05");
-            Object mime = readDeclaredField(metadata, "A06");
-            Object timestamp = readDeclaredField(metadata, "A03");
-            if (!(directPath instanceof String) || ((String) directPath).isEmpty()) {
-                UnsentDiagnostics.record(appContext, "media.skip",
-                    directPath == null ? "direct_path_missing" : "metadata_type_mismatch");
+
+            // direct_path is optional for some Messenger 581 E2EE downloads. The completed
+            // result URI is the actual local payload; timestamp + MIME provide a strict fallback
+            // correlation key until the message model supplies its message/thread IDs.
+            String directPath = readNonEmptyStringField(metadata, "A05");
+            Object rawMime = readDeclaredField(metadata, "A06");
+            Object rawTimestamp = readDeclaredField(metadata, "A03");
+            long mediaKeyTimestamp = rawTimestamp instanceof Number
+                ? ((Number) rawTimestamp).longValue() : 0;
+            if (mediaKeyTimestamp <= 0) {
+                UnsentDiagnostics.record(appContext, "media.skip", "timestamp_missing");
                 return;
             }
-            if (!(mime instanceof String) || ((String) mime).isEmpty()) {
-                UnsentDiagnostics.record(appContext, "media.skip",
-                    mime == null ? "mime_missing" : "metadata_type_mismatch");
+            String mimeType = rawMime instanceof String ? (String) rawMime : null;
+            Context context = appContext;
+            if (context == null) {
+                UnsentDiagnostics.record(appContext, "media.skip", "no_context");
                 return;
             }
-            if (!(timestamp instanceof Number)) {
-                UnsentDiagnostics.record(appContext, "media.skip",
-                    timestamp == null ? "timestamp_missing" : "metadata_type_mismatch");
+            if (mimeType == null || mimeType.isEmpty()) {
+                try { mimeType = context.getContentResolver().getType((Uri) resultUri); }
+                catch (RuntimeException ignored) { }
+            }
+
+            UnsentMediaArchive.Result archived = UnsentMediaArchive.capture(
+                context, (Uri) resultUri, directPath, mimeType, mediaKeyTimestamp,
+                downloader.getClass().getClassLoader());
+            if (archived == null || !archived.saved) {
+                String reason = archived == null || archived.failure == null ? "db_error" : archived.failure;
+                if ("db_error".equals(reason)) {
+                    UnsentDiagnostics.record(appContext, "media.save", "db_error");
+                } else {
+                    UnsentDiagnostics.record(appContext, "media.skip", reason);
+                }
                 return;
             }
-            ClassLoader loader = downloader.getClass().getClassLoader();
-            Class<?> fileHelper = Class.forName("X.001", false, loader);
-            java.lang.reflect.Method resolver = fileHelper.getDeclaredMethod("A0F", String.class);
-            resolver.setAccessible(true);
-            Object resolvedFile = resolver.invoke(null, localPath);
-            if (!(resolvedFile instanceof File)) {
-                UnsentDiagnostics.record(appContext, "media.skip", "missing_file");
-                return;
-            }
-            captureDownloadedImage((String) directPath, (String) mime,
-                ((Number) timestamp).longValue(), ((File) resolvedFile).getAbsolutePath());
+            incrementUnsentCounter(UNSENT_MEDIA_HITS);
+            if (!archived.duplicate) incrementUnsentCounter(UNSENT_MEDIA_SAVED);
+            UnsentDiagnostics.record(appContext, "media.capture",
+                archived.usedDirectPath ? "direct_key" : "timestamp_fallback");
+            UnsentDiagnostics.record(appContext, "media.save", archived.duplicate ? "duplicate" :
+                (archived.linked ? "saved_linked" : "saved_pending"));
         } catch (Exception error) {
             UnsentDiagnostics.record(appContext, "media.save", "db_error");
-            hookFailedPrivately("keep_unsent", "Can't inspect completed image download", error);
+            hookFailedPrivately("keep_unsent", "Can't archive completed Messenger image", error);
         }
+    }
+
+    private static String readNonEmptyStringField(Object instance, String name) {
+        if (instance == null) return null;
+        Class<?> owner = instance.getClass();
+        while (owner != null) {
+            try {
+                java.lang.reflect.Field field = owner.getDeclaredField(name);
+                field.setAccessible(true);
+                Object value = field.get(instance);
+                if (value instanceof String && !((String) value).isEmpty()) return (String) value;
+            } catch (NoSuchFieldException ignored) {
+                // Obfuscated subclasses can shadow a field; keep checking their parent classes.
+            } catch (Exception ignored) {
+                return null;
+            }
+            owner = owner.getSuperclass();
+        }
+        return null;
     }
 
     private static Object readDeclaredField(Object instance, String name) throws ReflectiveOperationException {
@@ -812,107 +846,37 @@ public final class Settings {
         }
     }
 
+    /** Compatibility bridge for callers that already hold a completed local file. */
     public static void captureDownloadedImage(String directPath, String mimeType,
             long mediaKeyTimestamp, String sourcePath) {
-        UnsentDiagnostics.record(appContext, "media.capture", "entered");
-        if (!wouldUse("keep_unsent")) {
-            UnsentDiagnostics.record(appContext, "media.skip", "disabled");
-            return;
-        }
-        if (directPath == null || directPath.isEmpty()) {
-            UnsentDiagnostics.record(appContext, "media.skip", "missing_metadata");
-            return;
-        }
-        if (mimeType == null || !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) {
-            UnsentDiagnostics.record(appContext, "media.skip", "not_image");
-            return;
-        }
+        if (!wouldUse("keep_unsent")) return;
         if (sourcePath == null || sourcePath.isEmpty()) {
             UnsentDiagnostics.record(appContext, "media.skip", "missing_file");
             return;
         }
-        incrementUnsentCounter(UNSENT_MEDIA_HITS);
         Context context = appContext;
         if (context == null) {
             UnsentDiagnostics.record(appContext, "media.skip", "no_context");
             return;
         }
-        synchronized (UNSENT_MEDIA_ARCHIVE_LOCK) {
-            File temporary = null;
-            try {
-                File source = new File(sourcePath);
-                long sourceLength = source.length();
-                if (!source.isFile() || !source.canRead() || sourceLength <= 0) {
-                    UnsentDiagnostics.record(appContext, "media.skip", "unreadable");
-                    return;
-                }
-                if (sourceLength > MAX_UNSENT_IMAGE_BYTES) {
-                    UnsentDiagnostics.record(appContext, "media.skip", "too_large");
-                    return;
-                }
-                if (!hasImageFileSignature(source, mimeType)) {
-                    UnsentDiagnostics.record(appContext, "media.skip", "bad_signature");
-                    return;
-                }
-                String key = AntiUnsendStore.mediaKey(directPath, mediaKeyTimestamp);
-                if (key == null) {
-                    UnsentDiagnostics.record(appContext, "media.skip", "missing_metadata");
-                    return;
-                }
-                AntiUnsendStore store = AntiUnsendStore.get(context);
-                store.captureMediaMetadata(directPath, mediaKeyTimestamp, mimeType, System.currentTimeMillis());
-                File directory = new File(context.getFilesDir(), "hush_unsent_media");
-                if (!directory.isDirectory() && !directory.mkdirs()) {
-                    throw new java.io.IOException("Can't create private media directory");
-                }
-                String extension = imageExtension(mimeType);
-                File destination = new File(directory, key + "." + extension);
-                if (destination.isFile() && destination.length() > 0) {
-                    if (hasImageFileSignature(destination, mimeType)) {
-                        String destinationPath = destination.getAbsolutePath();
-                        boolean alreadyLinked = destinationPath.equals(store.mediaLocalPath(directPath, mediaKeyTimestamp));
-                        if (store.saveMediaFile(directPath, mediaKeyTimestamp, destinationPath, System.currentTimeMillis())) {
-                            if (!alreadyLinked) incrementUnsentCounter(UNSENT_MEDIA_SAVED);
-                            UnsentDiagnostics.record(appContext, "media.save", alreadyLinked ? "duplicate" : "saved");
-                        } else {
-                            destination.delete();
-                            UnsentDiagnostics.record(appContext, "media.save", "not_saved");
-                        }
-                        return;
-                    }
-                    if (!destination.delete()) throw new java.io.IOException("Can't replace invalid archived image");
-                }
-                temporary = new File(directory, key + ".tmp");
-                if (temporary.exists() && !temporary.delete()) throw new java.io.IOException("Can't replace temporary image");
-                long copied = 0;
-                byte[] buffer = new byte[16 * 1024];
-                try (FileInputStream input = new FileInputStream(source);
-                     FileOutputStream output = new FileOutputStream(temporary)) {
-                    int count;
-                    while ((count = input.read(buffer)) != -1) {
-                        copied += count;
-                        if (copied > MAX_UNSENT_IMAGE_BYTES) throw new java.io.IOException("Image exceeds local archive limit");
-                        output.write(buffer, 0, count);
-                    }
-                    output.flush();
-                    output.getFD().sync();
-                }
-                if (copied != sourceLength || copied == 0) throw new java.io.IOException("Downloaded image changed while being copied");
-                if (destination.exists() && !destination.delete()) throw new java.io.IOException("Can't replace archived image");
-                if (!temporary.renameTo(destination)) throw new java.io.IOException("Can't move image into private storage");
-                temporary = null;
-                if (!store.saveMediaFile(directPath, mediaKeyTimestamp, destination.getAbsolutePath(), System.currentTimeMillis())) {
-                    destination.delete();
-                    UnsentDiagnostics.record(appContext, "media.save", "not_saved");
-                    return;
-                }
-                incrementUnsentCounter(UNSENT_MEDIA_SAVED);
-                UnsentDiagnostics.record(appContext, "media.save", "saved");
-            } catch (Exception error) {
-                if (temporary != null) temporary.delete();
-                UnsentDiagnostics.record(appContext, "media.save", "db_error");
-                hookFailedPrivately("keep_unsent", "Can't save downloaded image for local history", error);
+        try {
+            UnsentMediaArchive.Result archived = UnsentMediaArchive.capture(
+                context, Uri.fromFile(new File(sourcePath)), directPath, mimeType,
+                mediaKeyTimestamp, Settings.class.getClassLoader());
+            if (archived == null || !archived.saved) {
+                String reason = archived == null || archived.failure == null ? "db_error" : archived.failure;
+                UnsentDiagnostics.record(appContext, "media.skip", reason);
+                return;
             }
+            incrementUnsentCounter(UNSENT_MEDIA_HITS);
+            if (!archived.duplicate) incrementUnsentCounter(UNSENT_MEDIA_SAVED);
+            UnsentDiagnostics.record(appContext, "media.capture",
+                archived.usedDirectPath ? "direct_key" : "timestamp_fallback");
+            UnsentDiagnostics.record(appContext, "media.save", archived.duplicate ? "duplicate" :
+                (archived.linked ? "saved_linked" : "saved_pending"));
+        } catch (RuntimeException error) {
+            UnsentDiagnostics.record(appContext, "media.save", "db_error");
+            hookFailedPrivately("keep_unsent", "Can't archive downloaded image", error);
         }
     }
 
