@@ -51,13 +51,16 @@ final class ChatNotifications {
         /** What Messenger attached to the line, a photo's preview say, and its type. Null when it attached nothing. */
         final android.net.Uri data;
         final String type;
+        final Parcelable picture;
 
-        Line(StatusBarNotification shown, String text, String sender, android.net.Uri data, String type) {
+        Line(StatusBarNotification shown, String text, String sender, android.net.Uri data, String type,
+                Parcelable picture) {
             this.shown = shown;
             this.text = text;
             this.sender = sender;
             this.data = data;
             this.type = type;
+            this.picture = picture;
         }
     }
 
@@ -86,8 +89,7 @@ final class ChatNotifications {
             if (found == null && notificationId != null && id.equals(String.valueOf(notificationId))) {
                 if (newest == null) {
                     CharSequence text = extras.getCharSequence(Notification.EXTRA_TEXT);
-                    if (text != null) return new Line(shown, text.toString(), null, null, null);
-                    continue;
+                    return new Line(shown, text == null ? null : text.toString(), null, null, null, picture(shown.getNotification()));
                 }
                 found = newest;
             }
@@ -97,9 +99,53 @@ final class ChatNotifications {
             if (sender != null && sender.equals(selfName(extras))) sender = null;
             Object data = found.getParcelable("uri");
             return new Line(shown, text == null ? null : text.toString(), sender,
-                data instanceof android.net.Uri ? (android.net.Uri) data : null, found.getString("type"));
+                data instanceof android.net.Uri ? (android.net.Uri) data : null, found.getString("type"),
+                found == newest ? picture(shown.getNotification()) : null);
         }
         return null;
+    }
+
+    /** BigPictureStyle belongs to the newest message. Large icons are contact avatars. */
+    @SuppressWarnings("deprecation")
+    private static Parcelable picture(Notification notification) {
+        Object value = notification.extras.getParcelable(Notification.EXTRA_PICTURE);
+        if (value instanceof android.graphics.Bitmap || value instanceof android.graphics.drawable.Icon) return (Parcelable) value;
+        if (Build.VERSION.SDK_INT >= 31) {
+            Object icon = notification.extras.getParcelable(Notification.EXTRA_PICTURE_ICON);
+            if (icon instanceof android.graphics.drawable.Icon) return (Parcelable) icon;
+        }
+        return null;
+    }
+
+    /** Counts only image fields, with no chat names, message text, IDs or image locations in Copy setup. */
+    @SuppressWarnings("deprecation")
+    static String imageSummary(Context context) {
+        int[][] counts = new int[2][4];
+        try {
+            NotificationManager manager = context.getSystemService(NotificationManager.class);
+            if (manager == null) return "unavailable";
+            for (StatusBarNotification shown : manager.getActiveNotifications()) {
+                if (shown.getTag() == null) continue;
+                int[] kind = counts[oneToOne(shown.getTag()) ? 0 : 1];
+                kind[0]++;
+                Bundle extras = shown.getNotification().extras;
+                if (extras == null) continue;
+                if (picture(shown.getNotification()) != null) kind[2]++;
+                if (extras.get("msgId") != null) kind[3]++;
+                Parcelable[] messages = extras.getParcelableArray(Notification.EXTRA_MESSAGES);
+                if (messages == null) continue;
+                for (Parcelable item : messages) {
+                    if (!(item instanceof Bundle)) continue;
+                    Bundle message = (Bundle) item;
+                    String type = message.getString("type");
+                    if (type != null && type.startsWith("image/") && message.getParcelable("uri") instanceof android.net.Uri) kind[1]++;
+                }
+            }
+        } catch (RuntimeException unreadable) { return "unavailable"; }
+        return "direct_active=" + counts[0][0] + ", direct_image_lines=" + counts[0][1]
+            + ", direct_pictures=" + counts[0][2] + ", direct_notification_ids=" + counts[0][3]
+            + ", group_active=" + counts[1][0] + ", group_image_lines=" + counts[1][1]
+            + ", group_pictures=" + counts[1][2] + ", group_notification_ids=" + counts[1][3];
     }
 
     /**

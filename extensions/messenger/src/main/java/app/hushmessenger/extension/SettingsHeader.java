@@ -34,7 +34,7 @@ final class SettingsHeader {
         LinearLayout column = ui.column();
         column.setTag(HEADER);
         column.setGravity(Gravity.CENTER_HORIZONTAL);
-        column.setPadding(ui.dp(24), ui.dp(28), ui.dp(24), ui.dp(20));
+        column.setPadding(ui.dp(16), ui.dp(16), ui.dp(16), ui.dp(12));
 
         ImageView icon = new ImageView(context);
         icon.setTag(ICON);
@@ -43,22 +43,22 @@ final class SettingsHeader {
         icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
         // The name under it says the same.
         icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        column.addView(icon, new LinearLayout.LayoutParams(ui.dp(64), ui.dp(64)));
+        column.addView(icon, new LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)));
 
         TextView name = new TextView(context);
         name.setTag(NAME);
         name.setText("HushMessenger");
-        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 32);
+        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 28);
         name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         name.setGravity(Gravity.CENTER);
         name.setAccessibilityHeading(true);
         // One line that shrinks at large text sizes, so the name is never split mid-word.
         name.setMaxLines(1);
-        name.setAutoSizeTextTypeUniformWithConfiguration(20, 32, 1, TypedValue.COMPLEX_UNIT_SP);
+        name.setAutoSizeTextTypeUniformWithConfiguration(20, 28, 1, TypedValue.COMPLEX_UNIT_SP);
         ShimmerTitle.wear(name, ui.light);
         LinearLayout.LayoutParams nameSpace = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        nameSpace.topMargin = ui.dp(12);
+        nameSpace.topMargin = ui.dp(8);
         column.addView(name, nameSpace);
 
         TextView version = ui.text(versionLine(text, hostVersion), 13, ui.muted, false);

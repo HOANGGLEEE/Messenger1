@@ -203,6 +203,45 @@ public final class MessageLog {
         if (queue(text, thread, id)) WRITER.schedule(MessageLog::drain, NAME_DELAY_MS, TimeUnit.MILLISECONDS);
     }
 
+    /** The native notification preview loader supplies a message ID and its finished local image file. */
+    static void recordImage(String id, String thread, File file) {
+        if (!Settings.wouldUse(KEY) || id == null || id.isEmpty() || thread == null || file == null) return;
+        java.io.FileInputStream picture;
+        try { picture = new java.io.FileInputStream(file); }
+        catch (java.io.IOException unreadable) {
+            Settings.hookFailedPrivately(KEY, "Can't open the downloaded notification photo", unreadable);
+            return;
+        }
+        try {
+            WRITER.execute(() -> {
+                try (picture) {
+                    synchronized (LOCK) {
+                        if (!Settings.wouldUse(KEY)) return;
+                        drain();
+                        Context context = Settings.appContext;
+                        if (context == null) return;
+                        List<Entry> entries = load(context);
+                        for (int i = 0; i < entries.size(); i++) {
+                            Entry entry = entries.get(i);
+                            if (!id.equals(entry.id) || !thread.equals(entry.thread) || !entry.media.isEmpty()) continue;
+                            String media = MessageLogMedia.keep(context, thread, id, picture);
+                            if (media.isEmpty()) return;
+                            entries.set(i, new Entry(entry.time, entry.thread, entry.text, entry.sender, entry.chat,
+                                entry.id, entry.unsent, true, media));
+                            save(context, entries);
+                            return;
+                        }
+                    }
+                } catch (Exception failure) {
+                    Settings.hookFailedPrivately(KEY, "Can't keep the downloaded notification photo", failure);
+                }
+            });
+        } catch (RuntimeException rejected) {
+            try { picture.close(); } catch (java.io.IOException ignored) { }
+            Settings.hookFailedPrivately(KEY, "Can't queue the downloaded notification photo", rejected);
+        }
+    }
+
     /** Queues and writes on the calling thread. Tests use it to skip the background thread. */
     static void storeNow(String text, String thread, String id) {
         queue(text, thread, id);
@@ -359,20 +398,25 @@ public final class MessageLog {
      */
     static void markUnsent(String id) {
         if (id == null || id.isEmpty()) return;
-        String[] shown = null;
+        ChatNotifications.Line shown = null;
         try {
-            shown = ChatNotifications.showing(Settings.appContext, id);
+            shown = ChatNotifications.line(Settings.appContext, id);
         } catch (RuntimeException unreadable) {
             // The id alone can still find it.
         }
-        String thread = shown == null ? null : clip(shown[0], MAX_THREAD_CHARS);
-        String text = shown == null ? null : clip(shown[1], MAX_TEXT_CHARS);
+        String thread = shown == null ? null : clip(shown.shown.getTag(), MAX_THREAD_CHARS);
+        String text = shown == null || shown.text == null ? null : clip(shown.text, MAX_TEXT_CHARS);
         String clipped = clip(id, MAX_ID_CHARS);
-        WRITER.execute(() -> markNow(clipped, thread, text));
+        ChatNotifications.Line snapshot = shown;
+        WRITER.execute(() -> markNow(clipped, thread, text, snapshot));
     }
 
     /** Marks the message on the calling thread. Tests use it to skip the background thread. Returns whether it found one. */
     static boolean markNow(String id, String thread, String text) {
+        return markNow(id, thread, text, null);
+    }
+
+    private static boolean markNow(String id, String thread, String text, ChatNotifications.Line snapshot) {
         synchronized (LOCK) {
             synchronized (PENDING) {
                 List<Entry> queued = new ArrayList<>(PENDING);
@@ -388,6 +432,11 @@ public final class MessageLog {
             try {
                 List<Entry> entries = load(context);
                 if (!Boolean.TRUE.equals(markIn(entries, id, thread, text))) return false;
+                for (int i = 0; i < entries.size(); i++) {
+                    Entry entry = entries.get(i);
+                    if (entry.unsent && id.equals(entry.id) && entry.media.isEmpty())
+                        entries.set(i, named(context, entry, snapshot));
+                }
                 save(context, entries);
                 Settings.activeAt.put(KEY, System.currentTimeMillis());
                 return true;
@@ -490,7 +539,10 @@ public final class MessageLog {
      * the line shows for it and the picture on it.
      */
     static Entry named(Context context, Entry entry) {
-        if (!entry.sender.isEmpty()) return entry;
+        return named(context, entry, null);
+    }
+
+    private static Entry named(Context context, Entry entry, ChatNotifications.Line snapshot) {
         String[] noted = null;
         if (!entry.id.isEmpty()) {
             synchronized (NOTED) {
@@ -498,28 +550,34 @@ public final class MessageLog {
             }
         }
         try {
-            String sender;
-            String chat;
+            String sender = entry.sender.isEmpty() ? null : entry.sender;
+            String chat = entry.chat.isEmpty() ? null : entry.chat;
             String text = entry.text;
             String media = entry.media;
-            ChatNotifications.Line line = entry.attachment && noted == null ? ChatNotifications.line(context, entry.id) : null;
+            ChatNotifications.Line line = snapshot == null ? ChatNotifications.line(context, entry.id) : snapshot;
+            boolean attachment = entry.attachment;
+            if (line != null) {
+                if (text.isEmpty() && line.text != null) text = clip(line.text, MAX_TEXT_CHARS);
+                attachment |= line.picture != null || line.data != null && line.type != null && line.type.startsWith("image/");
+                if (media.isEmpty()) media = MessageLogMedia.keep(context, entry.thread, entry.id, line.data, line.type);
+                if (media.isEmpty()) media = MessageLogMedia.keep(context, entry.thread, entry.id, line.picture);
+            }
             if (noted != null) {
                 sender = noted[0];
                 chat = noted[1];
-            } else if (line != null) {
-                if (text.isEmpty() && line.text != null) text = clip(line.text, MAX_TEXT_CHARS);
+            } else if (sender == null && line != null) {
                 sender = line.sender != null ? line.sender : ChatNotifications.sender(line.shown.getNotification(), text, entry.thread);
                 chat = ChatNotifications.conversation(line.shown.getNotification());
-                if (media.isEmpty()) media = MessageLogMedia.keep(context, entry.thread, entry.id, line.data, line.type);
-            } else {
+            } else if (sender == null) {
                 android.service.notification.StatusBarNotification shown = ChatNotifications.find(context, entry.thread);
                 if (shown == null) return entry;
                 sender = ChatNotifications.sender(shown.getNotification(), entry.text, entry.thread);
                 chat = ChatNotifications.conversation(shown.getNotification());
             }
-            if (sender == null && chat == null && text.equals(entry.text) && media.equals(entry.media)) return entry;
+            if (sender == null && chat == null && text.equals(entry.text) && media.equals(entry.media)
+                    && attachment == entry.attachment) return entry;
             return new Entry(entry.time, entry.thread, text, clip(sender == null ? "" : sender, MAX_NAME_CHARS),
-                clip(chat == null || chat.equals(sender) ? "" : chat, MAX_NAME_CHARS), entry.id, entry.unsent, entry.attachment, media);
+                clip(chat == null || chat.equals(sender) ? "" : chat, MAX_NAME_CHARS), entry.id, entry.unsent, attachment, media);
         } catch (RuntimeException unreadable) {
             return entry;
         }

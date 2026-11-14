@@ -1180,6 +1180,9 @@ public final class Settings {
     /** The notification hook hands the message here; the log stores it off this thread and swallows its own failures. */
     public static void recordReceivedMessage(String text, String thread) { MessageLog.record(text, thread, takeIncomingMessageId()); }
 
+    /** Messenger's preview loader has finished this message's photo, including group chats. */
+    public static void recordReceivedImage(String id, String thread, java.io.File file) { MessageLog.recordImage(id, thread, file); }
+
     /** The same notification hook asks this for an auto reply: on, not paused, and with at least one reply written. */
     public static boolean autoReplyWanted() { return AutoReply.wanted(); }
 

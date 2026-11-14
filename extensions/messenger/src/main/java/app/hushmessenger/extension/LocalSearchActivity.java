@@ -20,6 +20,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import java.io.File;
@@ -89,14 +90,62 @@ public final class LocalSearchActivity extends Activity {
     }
 
     @SuppressWarnings("deprecation") private View content() {
-        LinearLayout root = ui.column();
+        ScrollView controls = new ScrollView(this);
+        controls.setTag("local_search_controls");
+        LinearLayout controlsContent = ui.column();
+        controls.addView(controlsContent);
+        LinearLayout root = new LinearLayout(this) {
+            private int safeLeft, safeRight;
+
+            @Override public void setPadding(int left, int top, int right, int bottom) {
+                safeLeft = left;
+                safeRight = right;
+                super.setPadding(left, top, right, bottom);
+            }
+
+            @Override protected void onMeasure(int width, int height) {
+                int inset = ui.contentInset(View.MeasureSpec.getSize(width) - safeLeft - safeRight);
+                super.setPadding(safeLeft + inset, getPaddingTop(), safeRight + inset, getPaddingBottom());
+                // Keep results reachable when large text or the keyboard leaves a short window.
+                int room = Math.max(0, View.MeasureSpec.getSize(height) - getPaddingTop() - getPaddingBottom());
+                controls.measure(View.MeasureSpec.makeMeasureSpec(Math.max(0, View.MeasureSpec.getSize(width)
+                    - getPaddingLeft() - getPaddingRight()), View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(room / 2, View.MeasureSpec.AT_MOST));
+                controls.getLayoutParams().height = controls.getMeasuredHeight();
+                super.onMeasure(width, height);
+            }
+        };
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setLayoutDirection(text.layoutDirection());
+        root.setPadding(ui.dp(16), ui.dp(12), ui.dp(16), ui.dp(8));
         root.setBackgroundColor(ui.background);
+        root.addView(controls, new LinearLayout.LayoutParams(-1, -2));
         root.setOnApplyWindowInsetsListener((view, insets) -> {
-            view.setPadding(insets.getSystemWindowInsetLeft() + ui.dp(16), insets.getSystemWindowInsetTop() + ui.dp(12),
-                insets.getSystemWindowInsetRight() + ui.dp(16), insets.getSystemWindowInsetBottom() + ui.dp(8));
-            return insets;
+            int left = insets.getSystemWindowInsetLeft(), top = insets.getSystemWindowInsetTop();
+            int right = insets.getSystemWindowInsetRight(), bottom = insets.getSystemWindowInsetBottom();
+            android.view.DisplayCutout cutout = insets.getDisplayCutout();
+            if (cutout != null) {
+                left = Math.max(left, cutout.getSafeInsetLeft());
+                top = Math.max(top, cutout.getSafeInsetTop());
+                right = Math.max(right, cutout.getSafeInsetRight());
+                bottom = Math.max(bottom, cutout.getSafeInsetBottom());
+            }
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets safe = insets.getInsets(android.view.WindowInsets.Type.systemBars()
+                    | android.view.WindowInsets.Type.displayCutout() | android.view.WindowInsets.Type.ime());
+                left = Math.max(left, safe.left);
+                top = Math.max(top, safe.top);
+                right = Math.max(right, safe.right);
+                bottom = Math.max(bottom, safe.bottom);
+            }
+            view.setPadding(left + ui.dp(16), top + ui.dp(12), right + ui.dp(16), bottom + ui.dp(8));
+            return Build.VERSION.SDK_INT >= 30 ? android.view.WindowInsets.CONSUMED
+                : insets.consumeSystemWindowInsets().consumeDisplayCutout();
         });
-        root.addView(ui.title(text.get("local_search_title"), 22));
+        TextView title = ui.title(text.get("local_search_title"), 22);
+        title.setAccessibilityHeading(true);
+        controlsContent.addView(title);
+        LinearLayout searchRow = ui.largeText ? ui.column() : ui.row();
         field = ui.field(text.get("local_search_hint"), SEARCH_LENGTH, true);
         field.setTag("local_search_field");
         field.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
@@ -105,18 +154,22 @@ public final class LocalSearchActivity extends Activity {
             start();
             return true;
         });
-        ui.add(root, field, 12);
+        searchRow.addView(field, new LinearLayout.LayoutParams(ui.largeText ? -1 : 0, -2, ui.largeText ? 0 : 1));
         search = ui.primaryButton(text.get("local_search_run"));
         search.setTag("local_search_run");
         search.setOnClickListener(view -> {
             if (running != null) running.set(true);
             else start();
         });
-        ui.add(root, search, 8);
+        LinearLayout.LayoutParams searchSpace = new LinearLayout.LayoutParams(ui.largeText ? -1 : -2, -2);
+        searchSpace.topMargin = ui.largeText ? ui.dp(8) : 0;
+        searchSpace.setMarginStart(ui.largeText ? 0 : ui.dp(8));
+        searchRow.addView(search, searchSpace);
+        ui.add(controlsContent, searchRow, 12);
         status = ui.text("", 13, ui.muted, false);
         status.setTag("local_search_status");
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        ui.add(root, status, 10);
+        ui.add(controlsContent, status, 10);
         ListView list = new ListView(this);
         list.setTag("local_search_hits");
         // Each hit is its own card, so the gap between them is a clear divider and the list draws no press color of its own.

@@ -420,6 +420,13 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
         dependsOn(settingsExtension, featureResources)
         execute {
             validateControls(discoveredControls, selected)
+            val notificationImages = if (key == MESSAGE_LOG && packageMetadata.versionCode == "347415280") {
+                val renderer = mutableClassDefBy(IMAGE_RENDERER_280).methods.single { it.name == "A06" }
+                val updater = mutableClassDefBy(IMAGE_UPDATER_280).methods.single { it.name == "A00" }
+                val sites = renderer.messageLogImageSites280()
+                updater.validateMessageLogImageUpdater280()
+                Triple(renderer, updater, sites)
+            } else null
             // Proved on the stock classes, and the extension's half checked, before any target is edited.
             val inboxRoute = if (INBOX_REFRESH_HOOK in selected) {
                 resolveInboxRefresh(discoveredControls.getValue(INBOX_REFRESH_HOOK).single()) { classDefByOrNull(it) } to inboxRefreshStub()
@@ -556,6 +563,10 @@ private fun controlPatch(key: String, title: String, summary: String, group: Str
                 }
                 if (emojiFontHolder != null && likeSnippet == null) java.util.logging.Logger.getLogger("").warning(
                     "Use system emoji: this Messenger builds its chat list snippet differently, so a Like there can still show as a box until Messenger's emoji font loads")
+            }
+            notificationImages?.let { (renderer, updater, sites) ->
+                renderer.injectMessageLogImages280(sites)
+                updater.injectMessageLogImageUpdater280()
             }
             recordControl(key)
             applied = true

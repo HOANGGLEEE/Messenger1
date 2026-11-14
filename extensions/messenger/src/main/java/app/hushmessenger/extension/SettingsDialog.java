@@ -22,6 +22,7 @@ final class SettingsDialog extends LinearLayout {
     private final SettingsUi ui;
     private final LinearLayout header, scrolled;
     private boolean compact;
+    private int safeLeft, safeRight;
 
     SettingsDialog(Activity owner, SettingsUi ui, SettingsText text, String title, String hint) {
         super(owner);
@@ -81,6 +82,8 @@ final class SettingsDialog extends LinearLayout {
                 right = Math.max(right, safe.right);
                 bottom = Math.max(bottom, safe.bottom);
             }
+            safeLeft = left;
+            safeRight = right;
             setPadding(ui.dp(20) + left, ui.dp(20) + top, ui.dp(20) + right, ui.dp(16) + bottom);
             return Build.VERSION.SDK_INT >= 30 ? WindowInsets.CONSUMED : insets.consumeSystemWindowInsets().consumeDisplayCutout();
         });
@@ -118,10 +121,30 @@ final class SettingsDialog extends LinearLayout {
     }
 
     @Override protected void onMeasure(int widthSpec, int heightSpec) {
+        int inset = ui.contentInset(MeasureSpec.getSize(widthSpec) - safeLeft - safeRight);
+        setPadding(ui.dp(20) + safeLeft + inset, getPaddingTop(), ui.dp(20) + safeRight + inset, getPaddingBottom());
         int width = Math.max(0, MeasureSpec.getSize(widthSpec) - getPaddingLeft() - getPaddingRight());
         int available = Math.max(0, MeasureSpec.getSize(heightSpec) - getPaddingTop() - getPaddingBottom());
         int exact = MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY);
         int natural = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED);
+        int widestAction = 0;
+        for (int i = 0; i < actions.getChildCount(); i++) {
+            Button action = (Button) actions.getChildAt(i);
+            int labelWidth = (int) Math.ceil(android.text.Layout.getDesiredWidth(action.getText(), action.getPaint()));
+            widestAction = Math.max(widestAction, Math.max(action.getMinimumWidth(),
+                labelWidth + action.getCompoundPaddingLeft() + action.getCompoundPaddingRight()));
+        }
+        int actionWidth = widestAction * actions.getChildCount() + ui.dp(12) * Math.max(0, actions.getChildCount() - 1);
+        boolean stack = ui.largeText || actionWidth > width;
+        actions.setOrientation(stack ? VERTICAL : HORIZONTAL);
+        for (int i = 0; i < actions.getChildCount(); i++) {
+            LayoutParams params = (LayoutParams) actions.getChildAt(i).getLayoutParams();
+            params.width = stack ? -1 : 0;
+            params.weight = stack ? 0 : 1;
+            params.topMargin = stack && i > 0 ? ui.dp(8) : 0;
+            params.setMarginStart(!stack && i > 0 ? ui.dp(12) : 0);
+            params.resolveLayoutDirection(getLayoutDirection());
+        }
         header.measure(exact, natural);
         actions.measure(exact, natural);
         boolean shortWindow = header.getMeasuredHeight() + actions.getMeasuredHeight() + ui.dp(96) > available;

@@ -43,23 +43,62 @@ final class MessageLogMedia {
      */
     static String keep(Context context, String thread, String id, Uri data, String type) {
         if (context == null || data == null || type == null || !type.startsWith("image/") || id == null || id.isEmpty()) return "";
-        String name = MessageLog.digest(thread + '\u0000' + id);
         try {
             byte[] picture;
             try (InputStream in = context.getContentResolver().openInputStream(data)) {
                 if (in == null) return "";
                 picture = readUpTo(in, MAX_BYTES);
             }
-            if (picture == null || picture.length == 0) return "";
-            File dir = new File(context.getFilesDir(), DIR);
-            if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("can't make " + DIR);
-            MessageLog.sealInto(dir, name, picture);
-            return name;
+            return store(context, thread, id, picture);
         } catch (Exception failure) {
             // The words still make it into the log; only the picture is missing.
             Settings.hookFailedPrivately(MessageLog.KEY, "Can't keep a photo in the message log", failure);
             return "";
         }
+    }
+
+    /** Copies BigPictureStyle's bitmap or icon on the log writer, with the same encrypted storage and byte limit. */
+    static String keep(Context context, String thread, String id, android.os.Parcelable picture) {
+        if (context == null || picture == null || id == null || id.isEmpty()) return "";
+        try {
+            android.graphics.Bitmap bitmap = picture instanceof android.graphics.Bitmap ? (android.graphics.Bitmap) picture : null;
+            if (picture instanceof android.graphics.drawable.Icon) {
+                android.graphics.drawable.Drawable drawable = ((android.graphics.drawable.Icon) picture).loadDrawable(context);
+                if (drawable instanceof android.graphics.drawable.BitmapDrawable)
+                    bitmap = ((android.graphics.drawable.BitmapDrawable) drawable).getBitmap();
+            }
+            if (bitmap == null || bitmap.isRecycled()) return "";
+            ByteArrayOutputStream out = new ByteArrayOutputStream() {
+                @Override public synchronized void write(byte[] bytes, int offset, int length) {
+                    if (length > MAX_BYTES - size()) throw new IllegalStateException("notification picture exceeds byte limit");
+                    super.write(bytes, offset, length);
+                }
+
+                @Override public synchronized void write(int value) {
+                    if (size() >= MAX_BYTES) throw new IllegalStateException("notification picture exceeds byte limit");
+                    super.write(value);
+                }
+            };
+            if (!bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out) || out.size() == 0) return "";
+            return store(context, thread, id, out.toByteArray());
+        } catch (Exception failure) {
+            Settings.hookFailedPrivately(MessageLog.KEY, "Can't keep a notification photo in the message log", failure);
+            return "";
+        }
+    }
+
+    /** The native loader's file is held open until the writer has copied it, even if Messenger deletes its cache entry. */
+    static String keep(Context context, String thread, String id, InputStream input) throws Exception {
+        return store(context, thread, id, readUpTo(input, MAX_BYTES));
+    }
+
+    private static String store(Context context, String thread, String id, byte[] picture) throws Exception {
+        if (picture == null || picture.length == 0 || picture.length > MAX_BYTES) return "";
+        File dir = new File(context.getFilesDir(), DIR);
+        if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("can't make " + DIR);
+        String name = MessageLog.digest(thread + '\u0000' + id);
+        MessageLog.sealInto(dir, name, picture);
+        return name;
     }
 
     /** The picture kept under [name], or null when it's gone. */

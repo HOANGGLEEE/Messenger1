@@ -42,14 +42,14 @@ public class SettingsTitleBarTest {
             assertSame("The header comes first on the page", header, ((ViewGroup) header.getParent()).getChildAt(0));
             assertSame(root.findViewWithTag("find_control"), ((ViewGroup) header.getParent()).findViewWithTag("find_control"));
             assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, header.getLayoutParams().width);
-            assertEquals(24, header.getPaddingStart());
-            assertEquals(28, header.getPaddingTop());
-            assertEquals(24, header.getPaddingEnd());
-            assertEquals(20, header.getPaddingBottom());
+            assertEquals(16, header.getPaddingStart());
+            assertEquals(16, header.getPaddingTop());
+            assertEquals(16, header.getPaddingEnd());
+            assertEquals(12, header.getPaddingBottom());
 
             int middle = centre(header);
-            assertEquals(64, icon.getWidth());
-            assertEquals(64, icon.getHeight());
+            assertEquals(48, icon.getWidth());
+            assertEquals(48, icon.getHeight());
             assertEquals(ImageView.ScaleType.FIT_CENTER, icon.getScaleType());
             assertEquals(middle, centre(icon), 1);
             assertEquals(Gravity.CENTER_HORIZONTAL, name.getGravity() & Gravity.HORIZONTAL_GRAVITY_MASK);
@@ -57,9 +57,9 @@ public class SettingsTitleBarTest {
             assertEquals(middle, centre(version), 1);
             assertEquals(Gravity.CENTER_HORIZONTAL, version.getGravity() & Gravity.HORIZONTAL_GRAVITY_MASK);
 
-            assertEquals(12, name.getTop() - icon.getBottom());
+            assertEquals(8, name.getTop() - icon.getBottom());
             assertEquals(4, version.getTop() - name.getBottom());
-            assertEquals(32f, name.getTextSize(), 0.01f);
+            assertEquals(28f, name.getTextSize(), 0.01f);
             assertEquals(13f, version.getTextSize(), 0.01f);
             assertEquals("HushMessenger", name.getText().toString());
             assertTrue(ShimmerTitle.wears(name));
@@ -112,6 +112,19 @@ public class SettingsTitleBarTest {
             controls.scrollTo(0, 0);
             layout(screen.get(), 400, 900);
             assertEquals(View.INVISIBLE, wordmark.getVisibility());
+        }
+    }
+
+    @Test @Config(qualifiers = "w1280dp-h900dp-mdpi")
+    public void wideWindowsKeepBothPagesOnACentredReadableColumn() {
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            View root = layout(screen.get(), 1280, 900);
+            View page = root.findViewWithTag("controls_page");
+            assertEquals(720, page.getWidth());
+            assertEquals(280, ((View) page.getParent()).getPaddingLeft());
+            root.findViewWithTag("tab_app").performClick();
+            root = layout(screen.get(), 1280, 900);
+            assertEquals(720, root.findViewWithTag("app_page").getWidth());
         }
     }
 

@@ -23,6 +23,7 @@ fixtures/
 local.properties
 gradle.local.properties
 .env
+.secrets/
 .claude/
 CLAUDE.md
 CODEX_CHANGELOG.md

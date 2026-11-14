@@ -230,6 +230,30 @@ public class LocalChatSearchTest {
         return ((android.widget.TextView) activity.getWindow().getDecorView().findViewWithTag("local_search_status")).getText().toString();
     }
 
+    @Test public void searchLayoutKeepsControlsAndResultsUsableAcrossWindowSizes() {
+        Settings.preferences.edit().putBoolean(LocalChatSearch.KEY, true).commit();
+        for (int width : new int[] {320, 390, 1280}) {
+            int height = width == 320 ? 300 : 844;
+            RuntimeEnvironment.setQualifiers("en-rUS-w" + width + "dp-h" + height + "dp-mdpi");
+            RuntimeEnvironment.setFontScale(width == 320 ? 2f : 1f);
+            try (var screen = Robolectric.buildActivity(LocalSearchActivity.class, screenFor(null)).setup()) {
+                View decor = screen.get().getWindow().getDecorView();
+                decor.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
+                decor.layout(0, 0, width, height);
+                View field = decor.findViewWithTag("local_search_field");
+                View run = decor.findViewWithTag("local_search_run");
+                View results = decor.findViewWithTag("local_search_hits");
+                assertTrue(field.getWidth() > 0);
+                assertTrue(run.getHeight() >= 48);
+                assertTrue(results.getHeight() > 0);
+                assertTrue(results.getWidth() <= Math.min(width - 32, 720));
+                if (width == 320) assertTrue(run.getTop() >= field.getBottom());
+                else assertTrue(run.getLeft() >= field.getRight());
+            }
+        }
+    }
+
     @Test public void searchWithNothingTypedSaysWhatToDo() {
         Settings.preferences.edit().putBoolean(LocalChatSearch.KEY, true).commit();
         Activity activity = Robolectric.buildActivity(LocalSearchActivity.class, screenFor(null)).setup().get();
@@ -242,6 +266,7 @@ public class LocalChatSearchTest {
 
     // Native graphics, so the optional screenshots draw what's on screen and not a blank frame.
     @Test @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    @Config(qualifiers = "en-rUS-w390dp-h844dp-mdpi")
     public void hitsAreCardsWithRoomBetweenThemAndALongOneEndsInAnEllipsis() throws Exception {
         Settings.preferences.edit().putBoolean(LocalChatSearch.KEY, true).commit();
         File databases = RuntimeEnvironment.getApplication().getDatabasePath("x").getParentFile();

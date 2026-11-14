@@ -292,8 +292,17 @@ public final class SettingsActivity extends Activity {
         LinearLayout root = new LinearLayout(this) {
             private int availableHeight = -1;
             private boolean revealSearch;
+            private int safeLeft, safeRight;
+
+            @Override public void setPadding(int left, int top, int right, int bottom) {
+                safeLeft = left;
+                safeRight = right;
+                super.setPadding(left, top, right, bottom);
+            }
 
             @Override protected void onMeasure(int width, int height) {
+                int inset = ui.contentInset(View.MeasureSpec.getSize(width) - safeLeft - safeRight);
+                super.setPadding(safeLeft + inset, getPaddingTop(), safeRight + inset, getPaddingBottom());
                 int nextHeight = View.MeasureSpec.getSize(height) - getPaddingTop() - getPaddingBottom();
                 if (nextHeight != availableHeight) {
                     availableHeight = nextHeight;
@@ -339,8 +348,17 @@ public final class SettingsActivity extends Activity {
                 right = Math.max(right, cutout.getSafeInsetRight());
                 bottom = Math.max(bottom, cutout.getSafeInsetBottom());
             }
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets safe = insets.getInsets(android.view.WindowInsets.Type.systemBars()
+                    | android.view.WindowInsets.Type.displayCutout() | android.view.WindowInsets.Type.ime());
+                left = Math.max(left, safe.left);
+                top = Math.max(top, safe.top);
+                right = Math.max(right, safe.right);
+                bottom = Math.max(bottom, safe.bottom);
+            }
             view.setPadding(left, top, right, bottom);
-            return insets.consumeSystemWindowInsets().consumeDisplayCutout();
+            return Build.VERSION.SDK_INT >= 30 ? android.view.WindowInsets.CONSUMED
+                : insets.consumeSystemWindowInsets().consumeDisplayCutout();
         });
         setContentView(root);
         buildHeader(root);
@@ -709,7 +727,7 @@ public final class SettingsActivity extends Activity {
         open.setBackground(new android.graphics.drawable.InsetDrawable(ui.interactive(ui.background, ui.accent, 12), 0, ui.dp(6), 0, ui.dp(6)));
         open.setPadding(ui.dp(12), ui.dp(6), ui.dp(12), ui.dp(6));
         open.setOnClickListener(view -> openMessenger());
-        LinearLayout.LayoutParams openParams = new LinearLayout.LayoutParams(ui.largeText ? -2 : ui.dp(68), -2);
+        LinearLayout.LayoutParams openParams = new LinearLayout.LayoutParams(-2, -2);
         // Large text stacks Open under the bar, on the page's line rather than the bar's.
         openParams.setMarginStart(ui.dp(12));
         openParams.topMargin = ui.dp(ui.largeText ? 8 : 0);

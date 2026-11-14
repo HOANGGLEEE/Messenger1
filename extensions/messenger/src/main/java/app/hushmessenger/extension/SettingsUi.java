@@ -73,6 +73,9 @@ final class SettingsUi {
 
     int dp(int value) { return Math.round(value * context.getResources().getDisplayMetrics().density); }
 
+    /** Keep settings readable in tablet and desktop windows. */
+    int contentInset(int availableWidth) { return Math.max(0, (availableWidth - dp(720)) / 2); }
+
     LinearLayout column() {
         LinearLayout view = new LinearLayout(context);
         view.setOrientation(LinearLayout.VERTICAL);
@@ -111,7 +114,6 @@ final class SettingsUi {
 
         void badge(TextView view) {
             badge = view;
-            view.setSingleLine(true);
             addView(view, new LayoutParams(-2, -2));
         }
 

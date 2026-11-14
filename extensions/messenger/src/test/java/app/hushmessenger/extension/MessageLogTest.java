@@ -1094,6 +1094,131 @@ public class MessageLogTest {
         }
     }
 
+    @Test public void aGroupPhotoWithCaptionAndNotedNamesStillKeepsItsImage() throws Exception {
+        Context context = Settings.appContext;
+        byte[] image = {1, 2, 3, 4};
+        android.net.Uri uri = android.net.Uri.parse("content://app.hushmessenger.test/group-image");
+        org.robolectric.Shadows.shadowOf(context.getContentResolver()).registerInputStreamSupplier(uri,
+            () -> new java.io.ByteArrayInputStream(image));
+        String caption = "Huy Hoàng đã gửi một ảnh.";
+        android.app.Notification.MessagingStyle.Message photo = new android.app.Notification.MessagingStyle.Message(
+            caption, 1, new android.app.Person.Builder().setName("Huy Hoàng").build()).setData("image/jpeg", uri);
+        photo.getExtras().putString("msgId", "group-photo");
+        android.app.Notification notification = new android.app.Notification.Builder(context, "chats")
+            .setSmallIcon(android.R.drawable.sym_def_app_icon).setStyle(new android.app.Notification.MessagingStyle(
+                new android.app.Person.Builder().setName("Me").build()).setGroupConversation(true)
+                .setConversationTitle("test").addMessage(photo)).build();
+        android.app.NotificationManager manager = context.getSystemService(android.app.NotificationManager.class);
+        manager.notify("GROUP:77", 1, notification);
+        try {
+            MessageLog.noteNames("GROUP:77", "group-photo", caption, notification);
+            String summary = ChatNotifications.imageSummary(context);
+            assertTrue(summary, summary.contains("group_image_lines=1"));
+            assertFalse(summary.contains("Huy Hoàng"));
+            assertFalse(summary.contains("group-photo"));
+            assertFalse(summary.contains(uri.toString()));
+            MessageLog.storeNow(caption, "GROUP:77", "group-photo");
+            MessageLog.Entry entry = MessageLog.entries().get(0);
+            assertTrue(entry.attachment);
+            assertEquals("Huy Hoàng", entry.sender);
+            assertEquals("test", entry.chat);
+            assertArrayEquals(image, MessageLogMedia.open(context, entry.media));
+            assertTrue(MessageLog.markNow("group-photo", "GROUP:77", caption));
+            manager.cancelAll();
+            entry = MessageLog.entries().get(0);
+            assertTrue(entry.unsent);
+            assertArrayEquals(image, MessageLogMedia.open(context, entry.media));
+        } finally { manager.cancelAll(); }
+    }
+
+    @Test @Config(sdk = 36)
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    public void bigPictureAndPictureIconAreKeptWhenThePhotoArrivesAfterItsText() throws Exception {
+        Context context = Settings.appContext;
+        android.app.NotificationManager manager = context.getSystemService(android.app.NotificationManager.class);
+        android.graphics.Bitmap image = android.graphics.Bitmap.createBitmap(4, 3, android.graphics.Bitmap.Config.ARGB_8888);
+        image.eraseColor(android.graphics.Color.BLUE);
+        java.io.ByteArrayOutputStream encoded = new java.io.ByteArrayOutputStream();
+        assertTrue(image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, encoded));
+        try {
+            for (boolean icon : new boolean[] {false, true}) {
+                String id = icon ? "icon-photo" : "bitmap-photo";
+                MessageLog.storeNow("Đã gửi một ảnh", "GROUP:77", id);
+                android.os.Bundle extras = new android.os.Bundle();
+                extras.putString("msgId", id);
+                if (icon) extras.putParcelable(android.app.Notification.EXTRA_PICTURE_ICON,
+                    android.graphics.drawable.Icon.createWithBitmap(image));
+                else extras.putParcelable(android.app.Notification.EXTRA_PICTURE, image);
+                manager.notify("GROUP:77", 1, new android.app.Notification.Builder(context, "chats")
+                    .setSmallIcon(android.R.drawable.sym_def_app_icon).setContentText("Đã gửi một ảnh").addExtras(extras).build());
+                assertTrue(MessageLog.markNow(id, "GROUP:77", "Đã gửi một ảnh"));
+                manager.cancelAll();
+                MessageLog.Entry entry = MessageLog.entries().get(0);
+                assertTrue(entry.unsent);
+                assertTrue(entry.attachment);
+                assertArrayEquals(encoded.toByteArray(), MessageLogMedia.open(context, entry.media));
+            }
+        } finally {
+            manager.cancelAll();
+            image.recycle();
+        }
+    }
+
+    @Test @Config(sdk = 36)
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    public void aGroupNotificationsBigPictureBelongsToItsNewestMessageAndNeverItsAvatar() throws Exception {
+        Context context = Settings.appContext;
+        android.app.NotificationManager manager = context.getSystemService(android.app.NotificationManager.class);
+        android.graphics.Bitmap image = android.graphics.Bitmap.createBitmap(4, 3, android.graphics.Bitmap.Config.ARGB_8888);
+        android.app.Person sender = new android.app.Person.Builder().setName("Huy Hoàng").build();
+        android.app.Notification.MessagingStyle.Message older = new android.app.Notification.MessagingStyle.Message("older", 1, sender);
+        older.getExtras().putString("msgId", "older");
+        android.app.Notification.MessagingStyle.Message newer = new android.app.Notification.MessagingStyle.Message("newer", 2, sender);
+        newer.getExtras().putString("msgId", "newer");
+        android.app.Notification notification = new android.app.Notification.Builder(context, "chats")
+            .setSmallIcon(android.R.drawable.sym_def_app_icon).setLargeIcon(image).setStyle(new android.app.Notification.MessagingStyle(
+                new android.app.Person.Builder().setName("Me").build()).setConversationTitle("test").setGroupConversation(true)
+                .addMessage(older).addMessage(newer)).build();
+        notification.extras.putParcelable(android.app.Notification.EXTRA_PICTURE, image);
+        manager.notify("GROUP:77", 1, notification);
+        try {
+            MessageLog.storeNow("older", "GROUP:77", "older");
+            assertEquals("", MessageLog.entries().get(0).media);
+            MessageLog.storeNow("newer", "GROUP:77", "newer");
+            assertFalse(MessageLog.entries().get(0).media.isEmpty());
+            notification.extras.remove(android.app.Notification.EXTRA_PICTURE);
+            notification.extras.putString("msgId", "avatar-only");
+            notification.extras.remove(android.app.Notification.EXTRA_MESSAGES);
+            manager.notify("GROUP:77", 1, notification);
+            MessageLog.storeNow("avatar", "GROUP:77", "avatar-only");
+            assertEquals("", MessageLog.entries().get(0).media);
+        } finally {
+            manager.cancelAll();
+            image.recycle();
+        }
+    }
+
+    @Test public void aNativeGroupPreviewFileIsJoinedByMessageIdAndSurvivesUnsend() throws Exception {
+        Context context = Settings.appContext;
+        File file = File.createTempFile("group-photo", ".jpg", context.getCacheDir());
+        byte[] image = {1, 2, 3, 4};
+        Files.write(file.toPath(), image);
+        try {
+            MessageLog.storeNow("Huy Hoàng đã gửi một ảnh.", "GROUP:77", "native-photo");
+            assertTrue(MessageLog.markNow("native-photo", "GROUP:77", null));
+            MessageLog.recordImage("native-photo", "GROUP:77", file);
+            // Android permits unlinking an open file; Windows keeps it locked until the worker closes it.
+            file.delete();
+            long deadline = System.currentTimeMillis() + 10_000;
+            while (MessageLog.entries().get(0).media.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(20);
+            MessageLog.Entry entry = MessageLog.entries().get(0);
+            assertTrue(entry.unsent);
+            assertTrue(entry.attachment);
+            assertArrayEquals(image, MessageLogMedia.open(context, entry.media));
+            assertEquals(1, MessageLog.entries().size());
+        } finally { file.delete(); }
+    }
+
     @Test public void aPictureGoesWhenItsMessageLeavesTheLog() throws Exception {
         Context context = Settings.appContext;
         File dir = new File(context.getFilesDir(), MessageLogMedia.DIR);

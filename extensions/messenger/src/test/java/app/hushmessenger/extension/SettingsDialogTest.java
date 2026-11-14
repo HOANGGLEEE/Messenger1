@@ -92,6 +92,28 @@ public class SettingsDialogTest {
         }
     }
 
+    @Test @Config(sdk = 36, qualifiers = "en-rUS-w390dp-h844dp-mdpi")
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    public void longActionsStackAndShortActionsReturnToOneRow() {
+        try (var owner = Robolectric.buildActivity(android.app.Activity.class).setup()) {
+            SettingsUi ui = new SettingsUi(owner.get(), false);
+            SettingsDialog sheet = new SettingsDialog(owner.get(), ui, new SettingsText(owner.get()), "Title", "Hint");
+            Button cancel = ui.button("Cancel and return to the conversation");
+            Button save = ui.primaryButton("Save these settings and continue");
+            sheet.action(cancel);
+            sheet.action(save);
+            int width = View.MeasureSpec.makeMeasureSpec(390, View.MeasureSpec.EXACTLY);
+            int height = View.MeasureSpec.makeMeasureSpec(844, View.MeasureSpec.EXACTLY);
+            sheet.measure(width, height);
+            assertEquals(LinearLayout.VERTICAL, sheet.actions.getOrientation());
+            cancel.setText("Cancel");
+            save.setText("Save");
+            sheet.forceLayout();
+            sheet.measure(width, height);
+            assertEquals(LinearLayout.HORIZONTAL, sheet.actions.getOrientation());
+        }
+    }
+
     @Test public void unfinishedRepliesAndSelectionSurviveRecreationWithoutSaving() {
         Bundle state = new Bundle();
         Dialog old;
