@@ -55,8 +55,9 @@ public final class UnsentDiagnostics {
         "no_payload", "db_error", "saved", "not_saved", "started", "failed", "other",
         "missing_uri", "missing_metadata", "metadata_container_missing", "direct_path_missing",
         "mime_missing", "timestamp_missing", "metadata_type_mismatch", "missing_file", "not_image",
-        "unreadable", "too_large", "bad_signature", "linked", "no_images", "duplicate", "forwarded",
-        "provider_unavailable", "downloader", "result", "metadata"
+        "unreadable", "too_large", "bad_signature", "decode_failed", "uri_open_failed",
+        "linked", "no_images", "duplicate", "forwarded", "direct_key", "timestamp_fallback",
+        "saved_linked", "saved_pending", "provider_unavailable", "downloader", "result", "metadata"
     )));
 
     private static final Set<String> DETAIL_CATEGORIES = Collections.unmodifiableSet(
