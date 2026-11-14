@@ -346,17 +346,24 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
             }
         }
         String exactMessageKey = null;
+        String exactLocalPath = null;
+        String exactContentHash = null;
         int candidates = 0;
-        try (Cursor cursor = db.query("media", new String[] {"media_key"},
-                "message_timestamp=? AND mime_type=? AND message_id IS NOT NULL AND message_id!='' AND local_path IS NULL AND content_hash IS NULL",
+        try (Cursor cursor = db.query("media", new String[] {"media_key", "local_path", "content_hash"},
+                "message_timestamp=? AND mime_type=? AND message_id IS NOT NULL AND message_id!=''",
                 new String[] {Long.toString(mediaKeyTimestamp), mimeType}, null, null,
                 "received_at DESC", "2")) {
             while (cursor.moveToNext()) {
                 candidates++;
                 exactMessageKey = cursor.getString(0);
+                exactLocalPath = cursor.isNull(1) ? null : cursor.getString(1);
+                exactContentHash = cursor.isNull(2) ? null : cursor.getString(2);
             }
         }
-        if (candidates == 1 && exactMessageKey != null) {
+        boolean unfilledUniqueMessageRow = candidates == 1 && exactContentHash == null && exactLocalPath == null;
+        boolean identicalPreviouslyCapturedImage = candidates == 1 && contentHash.equals(exactContentHash);
+        if (candidates == 1 && exactMessageKey != null &&
+                (unfilledUniqueMessageRow || identicalPreviouslyCapturedImage)) {
             ContentValues matched = new ContentValues();
             matched.put("content_hash", contentHash);
             matched.put("last_seen_at", now);
