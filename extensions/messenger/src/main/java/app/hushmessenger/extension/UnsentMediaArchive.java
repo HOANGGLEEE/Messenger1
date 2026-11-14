@@ -177,23 +177,29 @@ final class UnsentMediaArchive {
 
     private static boolean canDecodeImage(File file) {
         if (file == null || !file.isFile()) return false;
-        BitmapFactory.Options bounds = new BitmapFactory.Options();
-        bounds.inJustDecodeBounds = true;
-        BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return false;
+        Bitmap decoded = null;
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return false;
 
-        int sample = 1;
-        while (bounds.outWidth / (sample * 2) > DECODE_BOUND ||
-                bounds.outHeight / (sample * 2) > DECODE_BOUND) {
-            sample *= 2;
+            int sample = 1;
+            while (bounds.outWidth / (sample * 2) > DECODE_BOUND ||
+                    bounds.outHeight / (sample * 2) > DECODE_BOUND) {
+                sample *= 2;
+            }
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = sample;
+            options.inPreferredConfig = Bitmap.Config.RGB_565;
+            decoded = BitmapFactory.decodeFile(file.getAbsolutePath(), options);
+            return decoded != null;
+        } catch (RuntimeException invalidImage) {
+            // Android decoders may throw for truncated/corrupt payloads instead of returning null.
+            return false;
+        } finally {
+            if (decoded != null && !decoded.isRecycled()) decoded.recycle();
         }
-        BitmapFactory.Options options = new BitmapFactory.Options();
-        options.inSampleSize = sample;
-        options.inPreferredConfig = Bitmap.Config.RGB_565;
-        Bitmap decoded = BitmapFactory.decodeFile(file.getAbsolutePath(), options);
-        if (decoded == null) return false;
-        decoded.recycle();
-        return true;
     }
 
     private static String normalizeMime(String mimeType) {
