@@ -1428,9 +1428,9 @@ internal fun MutableMethod.validateMessageImageMetadata() {
 }
 
 /**
- * ArmadilloMediaDownloader completes the local file before invoking this callback. The metadata
- * object supplies direct_path, mime_type and media_key_timestamp; the temporary file is copied
- * before Messenger's callback path can delete it.
+ * ArmadilloMediaDownloader completes the local payload before invoking this callback. The result
+ * URI is the source of truth; direct_path is optional, while MIME and media-key timestamp allow
+ * strict later linkage to the message model. The payload is copied before Messenger can release it.
  */
 internal fun MutableMethod.validateDownloadedImageCapture(): Int {
     val code = implementation?.instructions?.toList()
@@ -1466,9 +1466,8 @@ internal fun MutableMethod.validateDownloadedImageCapture(): Int {
 }
 
 /**
- * p0/p1 are adjacent parameter registers. The runtime bridge follows Messenger's exact callback
- * contract: resolve the completed local File from resultUri.getPath(), while retaining the
- * metadata directPath only as the stable media-archive key.
+ * p0/p1 are adjacent parameter registers. The runtime bridge reads the completed result URI and
+ * copies its local stream; directPath is an optional preferred identity, not a prerequisite.
  */
 internal fun MutableMethod.injectDownloadedImageCapture() {
     validateDownloadedImageCapture()

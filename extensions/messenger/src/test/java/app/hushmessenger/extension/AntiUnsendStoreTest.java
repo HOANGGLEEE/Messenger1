@@ -305,4 +305,141 @@ public class AntiUnsendStoreTest {
         }
     }
 
+
+    @Test public void missingDirectPathLinksDownloadedFileWhenModelArrivesAfterDownload() throws Exception {
+        long timestamp = 12001;
+        String mime = "image/png";
+        String hash = "content-hash-one";
+        String key = AntiUnsendStore.downloadedMediaKey(timestamp, mime, hash);
+        assertEquals(key, store.capturePendingDownloadedMedia(key, timestamp, mime, hash, 100));
+
+        java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getFilesDir(), "pending-after-download.png");
+        try {
+            assertTrue(image.createNewFile());
+            assertTrue(store.saveMediaFileByKey(key, image.getAbsolutePath(), hash, 110));
+            store.captureMessageMetadata("m12", "thread-12", "sender-12", 12000, 115);
+            assertTrue(store.captureMediaMetadataForMessageWithoutDirectPath(
+                "m12", "thread-12", timestamp, mime, 120));
+            store.markUnsent("m12", 130);
+
+            var images = store.listUnsentMedia("m12");
+            assertEquals(1, images.size());
+            assertEquals(image.getAbsolutePath(), images.get(0).localPath);
+            assertEquals(130, images.get(0).unsentAt);
+            assertTrue(store.mediaIsLinked(key));
+        } finally {
+            image.delete();
+        }
+    }
+
+    @Test public void missingDirectPathUsesMessageModelRowWhenDownloadArrivesLater() throws Exception {
+        long timestamp = 13001;
+        String mime = "image/jpeg";
+        String hash = "content-hash-two";
+        store.captureMessageMetadata("m13", "thread-13", "sender-13", 13000, 100);
+        assertTrue(store.captureMediaMetadataForMessageWithoutDirectPath(
+            "m13", "thread-13", timestamp, mime, 105));
+
+        String key = store.capturePendingDownloadedMedia(
+            AntiUnsendStore.downloadedMediaKey(timestamp, mime, hash), timestamp, mime, hash, 110);
+        assertEquals(AntiUnsendStore.messageMediaKey("m13", timestamp, mime), key);
+        java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getFilesDir(), "pending-before-download.jpg");
+        try {
+            assertTrue(image.createNewFile());
+            assertTrue(store.saveMediaFileByKey(key, image.getAbsolutePath(), hash, 115));
+            store.markUnsent("m13", 120);
+            var images = store.listUnsentMedia("m13");
+            assertEquals(1, images.size());
+            assertEquals(image.getAbsolutePath(), images.get(0).localPath);
+        } finally {
+            image.delete();
+        }
+    }
+
+    @Test public void identicalTimestampAndMimeAcrossMessagesNeverGuessWhichMessageOwnsImage() throws Exception {
+        long timestamp = 14001;
+        String mime = "image/webp";
+        store.captureMediaMetadataForMessageWithoutDirectPath("m14", "thread-14", timestamp, mime, 100);
+        store.captureMediaMetadataForMessageWithoutDirectPath("m15", "thread-15", timestamp, mime, 101);
+
+        String hash = "ambiguous-content-hash";
+        String key = AntiUnsendStore.downloadedMediaKey(timestamp, mime, hash);
+        assertEquals(key, store.capturePendingDownloadedMedia(key, timestamp, mime, hash, 105));
+        java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getFilesDir(), "ambiguous-pending.webp");
+        try {
+            assertTrue(image.createNewFile());
+            assertTrue(store.saveMediaFileByKey(key, image.getAbsolutePath(), hash, 110));
+            store.markUnsent("m14", 120);
+            store.markUnsent("m15", 121);
+            assertTrue(store.listUnsentMedia("m14").isEmpty());
+            assertTrue(store.listUnsentMedia("m15").isEmpty());
+            assertFalse(store.mediaIsLinked(key));
+        } finally {
+            image.delete();
+        }
+    }
+
+
+    @Test public void lateTimestampCollisionInvalidatesAnEarlierFallbackLink() throws Exception {
+        long timestamp = 15001;
+        String mime = "image/jpeg";
+        String hash = "late-collision-hash";
+        String key = AntiUnsendStore.downloadedMediaKey(timestamp, mime, hash);
+        store.capturePendingDownloadedMedia(key, timestamp, mime, hash, 100);
+
+        java.io.File image = new java.io.File(RuntimeEnvironment.getApplication().getFilesDir(), "late-collision.jpg");
+        try {
+            assertTrue(image.createNewFile());
+            assertTrue(store.saveMediaFileByKey(key, image.getAbsolutePath(), hash, 105));
+            assertTrue(store.captureMediaMetadataForMessageWithoutDirectPath(
+                "m16", "thread-16", timestamp, mime, 110));
+            assertTrue(store.mediaIsLinked(key));
+
+            // A second message with the same timestamp/MIME makes the first fallback association ambiguous.
+            assertTrue(store.captureMediaMetadataForMessageWithoutDirectPath(
+                "m17", "thread-17", timestamp, mime, 115));
+            store.markUnsent("m16", 120);
+            store.markUnsent("m17", 121);
+
+            assertFalse(store.mediaIsLinked(key));
+            assertFalse(image.exists());
+            assertTrue(store.listUnsentMedia("m16").isEmpty());
+            assertTrue(store.listUnsentMedia("m17").isEmpty());
+        } finally {
+            image.delete();
+        }
+    }
+
+
+    @Test public void existingMessageWithSameTimestampPreventsFallbackFromChoosingAnotherMessage() throws Exception {
+        long timestamp = 16001;
+        String mime = "image/png";
+        store.captureMediaMetadataForMessage("/known/direct-path", "m18", "thread-18",
+            timestamp, mime, 100);
+        java.io.File known = new java.io.File(RuntimeEnvironment.getApplication().getFilesDir(), "known-image.png");
+        java.io.File pending = new java.io.File(RuntimeEnvironment.getApplication().getFilesDir(), "unknown-image.png");
+        try {
+            assertTrue(known.createNewFile());
+            assertTrue(store.saveMediaFile("/known/direct-path", timestamp, known.getAbsolutePath(),
+                "known-content-hash", 105));
+            assertTrue(store.captureMediaMetadataForMessageWithoutDirectPath(
+                "m19", "thread-19", timestamp, mime, 110));
+
+            String hash = "unknown-content-hash";
+            String key = AntiUnsendStore.downloadedMediaKey(timestamp, mime, hash);
+            assertEquals(key, store.capturePendingDownloadedMedia(key, timestamp, mime, hash, 115));
+            assertTrue(pending.createNewFile());
+            assertTrue(store.saveMediaFileByKey(key, pending.getAbsolutePath(), hash, 120));
+
+            store.markUnsent("m18", 130);
+            store.markUnsent("m19", 131);
+            assertEquals(1, store.listUnsentMedia("m18").size());
+            assertTrue(store.listUnsentMedia("m19").isEmpty());
+            assertFalse(store.mediaIsLinked(key));
+        } finally {
+            known.delete();
+            pending.delete();
+        }
+    }
+
 }

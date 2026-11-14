@@ -14,7 +14,7 @@ import java.util.List;
 /** Private local snapshots used only by Keep unsent messages. */
 final class AntiUnsendStore extends SQLiteOpenHelper {
     static final String DATABASE_NAME = "hush_unsent.db";
-    private static final int DATABASE_VERSION = 3;
+    private static final int DATABASE_VERSION = 4;
     private static final long RETENTION_MS = 30L * 24 * 60 * 60 * 1000;
     private static final int MAX_ROWS = 10_000;
     private static final int MAX_NOTIFICATION_ROWS = 30;
@@ -112,6 +112,7 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
             "thread_id TEXT," +
             "message_timestamp INTEGER," +
             "mime_type TEXT," +
+            "content_hash TEXT," +
             "local_path TEXT," +
             "received_at INTEGER NOT NULL," +
             "last_seen_at INTEGER NOT NULL," +
@@ -134,6 +135,7 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
         if (oldVersion < 2) createNotificationTable(db);
         if (oldVersion < 3) createMediaTable(db);
+        else if (oldVersion < 4) db.execSQL("ALTER TABLE media ADD COLUMN content_hash TEXT");
     }
 
     synchronized void captureText(String messageId, String threadId, String senderId,
@@ -189,16 +191,19 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
     }
 
     /**
-     * Record image metadata from the message model itself. The direct path plus media-key timestamp
-     * is the stable identity shared with the completed-download callback; no timestamp-only guessing.
+     * Record image metadata from the message model itself. Prefer the direct path; if it is absent,
+     * link only one pending file with the exact media-key timestamp and MIME type.
      */
     synchronized void captureMediaMetadataForMessage(String directPath, String messageId,
             String threadId, long mediaKeyTimestamp, String mimeType, long now) {
         if (directPath == null || directPath.isEmpty() || messageId == null || messageId.isEmpty() ||
                 mimeType == null || !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) return;
+        SQLiteDatabase db = getWritableDatabase();
+        invalidateConflictingLocalMedia(db, messageId, mediaKeyTimestamp, mimeType, now);
+        if (linkPendingMediaForMessage(messageId, threadId, mediaKeyTimestamp, mimeType, now)) return;
+        if (hasSavedMediaForMessage(db, messageId, mediaKeyTimestamp, mimeType)) return;
         String key = mediaKey(directPath, mediaKeyTimestamp);
         if (key == null) return;
-        SQLiteDatabase db = getWritableDatabase();
         long messageUnsentAt = 0;
         try (Cursor cursor = db.query("messages", new String[] {"unsent_at"},
                 "message_id=?", new String[] {messageId}, null, null, null, "1")) {
@@ -251,6 +256,251 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         pruneOccasionally(db, now);
     }
 
+    /**
+     * Link a completed local download to a message when Messenger omitted direct_path.
+     * The media-key timestamp and MIME type must identify exactly one pending file.
+     */
+    synchronized boolean linkPendingMediaForMessage(String messageId, String threadId,
+            long mediaKeyTimestamp, String mimeType, long now) {
+        if (messageId == null || messageId.isEmpty() || mediaKeyTimestamp <= 0 ||
+                mimeType == null || !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) return false;
+        SQLiteDatabase db = getWritableDatabase();
+        if (hasAmbiguousMediaTimestamp(db, mediaKeyTimestamp, mimeType) ||
+                hasOtherMessageMediaMetadata(db, messageId, mediaKeyTimestamp, mimeType)) return false;
+        String pendingKey = null;
+        int matches = 0;
+        try (Cursor cursor = db.query("media", new String[] {"media_key"},
+                "message_timestamp=? AND mime_type=? AND message_id IS NULL AND content_hash IS NOT NULL",
+                new String[] {Long.toString(mediaKeyTimestamp), mimeType}, null, null,
+                "received_at DESC", "2")) {
+            while (cursor.moveToNext()) {
+                matches++;
+                pendingKey = cursor.getString(0);
+            }
+        }
+        if (matches != 1 || pendingKey == null) return false;
+        long messageUnsentAt = 0;
+        try (Cursor cursor = db.query("messages", new String[] {"unsent_at"},
+                "message_id=?", new String[] {messageId}, null, null, null, "1")) {
+            if (cursor.moveToFirst() && !cursor.isNull(0)) messageUnsentAt = cursor.getLong(0);
+        }
+        ContentValues linked = new ContentValues();
+        linked.put("message_id", messageId);
+        if (threadId != null && !threadId.isEmpty()) linked.put("thread_id", threadId);
+        if (messageUnsentAt > 0) linked.put("unsent_at", messageUnsentAt);
+        linked.put("last_seen_at", now);
+        int updated = db.update("media", linked, "media_key=? AND message_id IS NULL",
+            new String[] {pendingKey});
+        pruneOccasionally(db, now);
+        return updated == 1;
+    }
+
+    /** Store message-side image metadata even when the E2EE direct path is absent. */
+    synchronized boolean captureMediaMetadataForMessageWithoutDirectPath(String messageId, String threadId,
+            long mediaKeyTimestamp, String mimeType, long now) {
+        if (messageId == null || messageId.isEmpty() || mediaKeyTimestamp <= 0 ||
+                mimeType == null || !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) return false;
+        SQLiteDatabase db = getWritableDatabase();
+        invalidateConflictingLocalMedia(db, messageId, mediaKeyTimestamp, mimeType, now);
+        if (linkPendingMediaForMessage(messageId, threadId, mediaKeyTimestamp, mimeType, now)) return true;
+        if (hasSavedMediaForMessage(db, messageId, mediaKeyTimestamp, mimeType)) return true;
+        String key = messageMediaKey(messageId, mediaKeyTimestamp, mimeType);
+        if (key == null) return false;
+        long messageUnsentAt = 0;
+        try (Cursor cursor = db.query("messages", new String[] {"unsent_at"},
+                "message_id=?", new String[] {messageId}, null, null, null, "1")) {
+            if (cursor.moveToFirst() && !cursor.isNull(0)) messageUnsentAt = cursor.getLong(0);
+        }
+        ContentValues values = new ContentValues();
+        values.put("media_key", key);
+        values.put("message_id", messageId);
+        if (threadId != null && !threadId.isEmpty()) values.put("thread_id", threadId);
+        values.put("message_timestamp", mediaKeyTimestamp);
+        values.put("mime_type", mimeType);
+        if (messageUnsentAt > 0) values.put("unsent_at", messageUnsentAt);
+        values.put("received_at", now);
+        values.put("last_seen_at", now);
+        db.insertWithOnConflict("media", null, values, SQLiteDatabase.CONFLICT_IGNORE);
+        pruneOccasionally(db, now);
+        return true;
+    }
+
+    /**
+     * Resolve a downloaded image to one exact message-side row when possible. If no unique
+     * message row exists, keep it as pending media and wait for the model callback.
+     */
+    synchronized String capturePendingDownloadedMedia(String fallbackKey, long mediaKeyTimestamp,
+            String mimeType, String contentHash, long now) {
+        if (fallbackKey == null || fallbackKey.isEmpty() || mediaKeyTimestamp <= 0 ||
+                mimeType == null || !mimeType.toLowerCase(java.util.Locale.ROOT).startsWith("image/") ||
+                contentHash == null || contentHash.isEmpty()) return null;
+        SQLiteDatabase db = getWritableDatabase();
+        try (Cursor cursor = db.query("media", new String[] {"media_key"},
+                "media_key=?", new String[] {fallbackKey}, null, null, null, "1")) {
+            if (cursor.moveToFirst()) {
+                ContentValues seen = new ContentValues();
+                seen.put("content_hash", contentHash);
+                seen.put("last_seen_at", now);
+                db.update("media", seen, "media_key=?", new String[] {fallbackKey});
+                pruneOccasionally(db, now);
+                return fallbackKey;
+            }
+        }
+        int pendingCandidates = 0;
+        try (Cursor cursor = db.query("media", new String[] {"media_key"},
+                "message_timestamp=? AND mime_type=? AND message_id IS NULL AND content_hash IS NOT NULL",
+                new String[] {Long.toString(mediaKeyTimestamp), mimeType}, null, null, null, "2")) {
+            while (cursor.moveToNext()) pendingCandidates++;
+        }
+        String exactMessageKey = null;
+        String exactLocalPath = null;
+        String exactContentHash = null;
+        int candidates = 0;
+        if (pendingCandidates == 0 && !hasAmbiguousMediaTimestamp(db, mediaKeyTimestamp, mimeType)) {
+            try (Cursor cursor = db.query("media", new String[] {"media_key", "local_path", "content_hash"},
+                    "message_timestamp=? AND mime_type=? AND message_id IS NOT NULL AND message_id!=''",
+                    new String[] {Long.toString(mediaKeyTimestamp), mimeType}, null, null,
+                    "received_at DESC", "2")) {
+                while (cursor.moveToNext()) {
+                    candidates++;
+                    exactMessageKey = cursor.getString(0);
+                    exactLocalPath = cursor.isNull(1) ? null : cursor.getString(1);
+                    exactContentHash = cursor.isNull(2) ? null : cursor.getString(2);
+                }
+            }
+        }
+        boolean unfilledUniqueMessageRow = candidates == 1 && exactContentHash == null && exactLocalPath == null;
+        boolean identicalPreviouslyCapturedImage = candidates == 1 && contentHash.equals(exactContentHash);
+        if (candidates == 1 && exactMessageKey != null &&
+                (unfilledUniqueMessageRow || identicalPreviouslyCapturedImage)) {
+            ContentValues matched = new ContentValues();
+            matched.put("content_hash", contentHash);
+            matched.put("last_seen_at", now);
+            db.update("media", matched, "media_key=?", new String[] {exactMessageKey});
+            pruneOccasionally(db, now);
+            return exactMessageKey;
+        }
+        ContentValues pending = new ContentValues();
+        pending.put("media_key", fallbackKey);
+        pending.put("message_timestamp", mediaKeyTimestamp);
+        pending.put("mime_type", mimeType);
+        pending.put("content_hash", contentHash);
+        pending.put("received_at", now);
+        pending.put("last_seen_at", now);
+        db.insertWithOnConflict("media", null, pending, SQLiteDatabase.CONFLICT_IGNORE);
+        pruneOccasionally(db, now);
+        return fallbackKey;
+    }
+
+    synchronized boolean saveMediaFileByKey(String mediaKey, String localPath,
+            String contentHash, long now) {
+        if (mediaKey == null || mediaKey.isEmpty() || localPath == null || localPath.isEmpty()) return false;
+        ContentValues values = new ContentValues();
+        values.put("local_path", localPath);
+        if (contentHash != null && !contentHash.isEmpty()) values.put("content_hash", contentHash);
+        values.put("last_seen_at", now);
+        SQLiteDatabase db = getWritableDatabase();
+        int updated = db.update("media", values,
+            "media_key=? AND (message_id IS NULL OR message_id!='')",
+            new String[] {mediaKey});
+        pruneOccasionally(db, now);
+        return updated > 0;
+    }
+
+    synchronized boolean mediaIsLinked(String mediaKey) {
+        if (mediaKey == null || mediaKey.isEmpty()) return false;
+        try (Cursor cursor = getReadableDatabase().query("media", new String[] {"message_id"},
+                "media_key=?", new String[] {mediaKey}, null, null, null, "1")) {
+            return cursor.moveToFirst() && !cursor.isNull(0) && !cursor.getString(0).isEmpty();
+        }
+    }
+
+    private static boolean hasOtherMessageMediaMetadata(SQLiteDatabase db, String messageId,
+            long mediaKeyTimestamp, String mimeType) {
+        try (Cursor cursor = db.query("media", new String[] {"media_key"},
+                "message_timestamp=? AND mime_type=? AND message_id IS NOT NULL AND message_id!='' AND message_id!=?",
+                new String[] {Long.toString(mediaKeyTimestamp), mimeType, messageId},
+                null, null, null, "1")) {
+            return cursor.moveToFirst();
+        }
+    }
+
+    /**
+     * If a second message later appears with the same timestamp/MIME pair, a previously
+     * timestamp-linked local capture is no longer provably attributable. Remove that link
+     * rather than showing the image under the wrong message.
+     */
+    private static void invalidateConflictingLocalMedia(SQLiteDatabase db, String messageId,
+            long mediaKeyTimestamp, String mimeType, long now) {
+        if (mediaKeyTimestamp <= 0 || mimeType == null) return;
+        String selection = "media_key LIKE 'local-%' AND message_timestamp=? AND mime_type=? " +
+            "AND message_id IS NOT NULL AND message_id!='' AND message_id!=?";
+        String[] args = new String[] {Long.toString(mediaKeyTimestamp), mimeType, messageId};
+        List<String> keys = new ArrayList<>();
+        try (Cursor cursor = db.query("media", new String[] {"media_key", "local_path"},
+                selection, args, null, null, null)) {
+            while (cursor.moveToNext()) {
+                keys.add(cursor.getString(0));
+                if (!cursor.isNull(1)) new File(cursor.getString(1)).delete();
+            }
+        }
+        ContentValues ambiguous = new ContentValues();
+        ambiguous.put("message_id", "");
+        ambiguous.putNull("unsent_at");
+        ambiguous.putNull("local_path");
+        ambiguous.put("last_seen_at", now);
+        for (String key : keys) {
+            db.update("media", ambiguous, "media_key=?", new String[] {key});
+        }
+        if (!keys.isEmpty()) markMediaTimestampAmbiguous(db, mediaKeyTimestamp, mimeType, now);
+    }
+
+    private static boolean hasAmbiguousMediaTimestamp(SQLiteDatabase db, long mediaKeyTimestamp,
+            String mimeType) {
+        if (mediaKeyTimestamp <= 0 || mimeType == null) return false;
+        try (Cursor cursor = db.query("media", new String[] {"media_key"},
+                "message_timestamp=? AND mime_type=? AND message_id=''",
+                new String[] {Long.toString(mediaKeyTimestamp), mimeType}, null, null, null, "1")) {
+            return cursor.moveToFirst();
+        }
+    }
+
+    private static void markMediaTimestampAmbiguous(SQLiteDatabase db, long mediaKeyTimestamp,
+            String mimeType, long now) {
+        if (mediaKeyTimestamp <= 0 || mimeType == null) return;
+        String digest = mediaKey("ambiguous:" + mimeType, mediaKeyTimestamp);
+        if (digest == null) return;
+        ContentValues marker = new ContentValues();
+        marker.put("media_key", "ambiguous-" + digest);
+        marker.put("message_id", "");
+        marker.put("message_timestamp", mediaKeyTimestamp);
+        marker.put("mime_type", mimeType);
+        marker.put("received_at", now);
+        marker.put("last_seen_at", now);
+        db.insertWithOnConflict("media", null, marker, SQLiteDatabase.CONFLICT_IGNORE);
+    }
+
+    private static boolean hasSavedMediaForMessage(SQLiteDatabase db, String messageId,
+            long mediaKeyTimestamp, String mimeType) {
+        try (Cursor cursor = db.query("media", new String[] {"media_key"},
+                "message_id=? AND message_timestamp=? AND mime_type=? AND local_path IS NOT NULL",
+                new String[] {messageId, Long.toString(mediaKeyTimestamp), mimeType}, null, null, null, "1")) {
+            return cursor.moveToFirst();
+        }
+    }
+
+    static String messageMediaKey(String messageId, long mediaKeyTimestamp, String mimeType) {
+        if (messageId == null || messageId.isEmpty() || mimeType == null) return null;
+        String digest = mediaKey("message:" + messageId + ":" + mimeType, mediaKeyTimestamp);
+        return digest == null ? null : "message-" + digest;
+    }
+
+    static String downloadedMediaKey(long mediaKeyTimestamp, String mimeType, String contentHash) {
+        if (mediaKeyTimestamp <= 0 || mimeType == null || contentHash == null || contentHash.isEmpty()) return null;
+        String digest = mediaKey("local:" + mimeType + ":" + contentHash, mediaKeyTimestamp);
+        return digest == null ? null : "local-" + digest;
+    }
+
     synchronized void captureMediaMetadata(String directPath, long mediaKeyTimestamp,
             String mimeType, long now) {
         if (directPath == null || directPath.isEmpty() || mimeType == null ||
@@ -286,9 +536,15 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
 
     synchronized boolean saveMediaFile(String directPath, long mediaKeyTimestamp,
             String localPath, long now) {
+        return saveMediaFile(directPath, mediaKeyTimestamp, localPath, null, now);
+    }
+
+    synchronized boolean saveMediaFile(String directPath, long mediaKeyTimestamp,
+            String localPath, String contentHash, long now) {
         if (directPath == null || directPath.isEmpty() || localPath == null || localPath.isEmpty()) return false;
         ContentValues values = new ContentValues();
         values.put("local_path", localPath);
+        if (contentHash != null && !contentHash.isEmpty()) values.put("content_hash", contentHash);
         values.put("last_seen_at", now);
         SQLiteDatabase db = getWritableDatabase();
         // Empty message_id is a deliberate ambiguity marker set when one media identity

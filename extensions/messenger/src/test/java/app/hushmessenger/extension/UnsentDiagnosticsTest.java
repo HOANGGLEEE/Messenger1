@@ -84,6 +84,23 @@ public class UnsentDiagnosticsTest {
         assertFalse(json.contains("private-message-id"));
     }
 
+    @Test public void uriArchiveOutcomesAreAllowListedWithoutLeakingMediaValues() throws Exception {
+        assertTrue(UnsentDiagnostics.recordFromProvider("media.capture", "timestamp_fallback"));
+        assertTrue(UnsentDiagnostics.recordFromProvider("media.capture", "direct_key"));
+        assertTrue(UnsentDiagnostics.recordFromProvider("media.save", "saved_pending"));
+        assertTrue(UnsentDiagnostics.recordFromProvider("media.save", "saved_linked"));
+        assertTrue(UnsentDiagnostics.recordFromProvider("media.skip", "uri_open_failed"));
+        assertTrue(UnsentDiagnostics.recordFromProvider("media.skip", "decode_failed"));
+        assertFalse(UnsentDiagnostics.recordFromProvider("media.save", "private-file-path"));
+
+        JSONObject report = new JSONObject(UnsentDiagnostics.report(context));
+        String json = report.toString();
+        assertTrue(json.contains("timestamp_fallback"));
+        assertTrue(json.contains("saved_pending"));
+        assertTrue(json.contains("decode_failed"));
+        assertFalse(json.contains("private-file-path"));
+    }
+
     @Test public void summaryReportsMediaAndCrossProcessHookStatus() {
         String summary = UnsentDiagnostics.summary(context);
         assertTrue(summary.contains("Hook media:"));
