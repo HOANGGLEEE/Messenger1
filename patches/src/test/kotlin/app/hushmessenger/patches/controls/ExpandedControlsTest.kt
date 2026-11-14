@@ -1,5 +1,6 @@
 package app.hushmessenger.patches.controls
 
+import app.hushmessenger.patches.CompatMirror
 import app.morphe.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
 import app.morphe.patcher.patch.BytecodePatch
 import app.morphe.patcher.patch.Patch
@@ -7,14 +8,18 @@ import app.morphe.patcher.patch.PatchException
 import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod
 import com.android.tools.smali.dexlib2.AccessFlags
 import com.android.tools.smali.dexlib2.Opcode
-import com.android.tools.smali.dexlib2.iface.instruction.FiveRegisterInstruction
+import com.android.tools.smali.dexlib2.iface.instruction.Instruction
+import com.android.tools.smali.dexlib2.iface.instruction.NarrowLiteralInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.OffsetInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.RegisterRangeInstruction
+import com.android.tools.smali.dexlib2.iface.instruction.TwoRegisterInstruction
 import com.android.tools.smali.dexlib2.iface.reference.TypeReference
+import com.android.tools.smali.dexlib2.immutable.ImmutableExceptionHandler
 import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
 import com.android.tools.smali.dexlib2.immutable.ImmutableMethodImplementation
+import com.android.tools.smali.dexlib2.immutable.ImmutableTryBlock
 import java.io.ByteArrayInputStream
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.test.*
@@ -29,26 +34,26 @@ class ExpandedControlsTest {
         val patches = Class.forName("app.hushmessenger.patches.controls.MessengerControlsPatchKt").methods
             .filter { it.name.startsWith("get") && it.returnType == BytecodePatch::class.java }
             .map { it.invoke(null) as BytecodePatch }.filter { it.name != null }
-        assertEquals(31, patches.size)
-        assertEquals(31, patches.map { it.name }.toSet().size)
+        assertEquals(ExpectedTotals.CONTROLS, patches.size)
+        assertEquals(ExpectedTotals.CONTROLS, patches.map { it.name }.toSet().size)
         val shared = patches.map { it.dependencies.filterIsInstance<BytecodePatch>().single() }.toSet()
         assertEquals(1, shared.size)
         assertNull(shared.single().name)
-        fun descendants(patch: Patch<*>): Set<Patch<*>> = patch.dependencies.flatMap { setOf(it) + descendants(it) }.toSet()
+        fun descendants(patch: Patch): Set<Patch> = patch.dependencies.flatMap { setOf(it) + descendants(it) }.toSet()
         for (patch in patches) {
             assertTrue(descendants(patch).all { it.name == null }, "${patch.name} implicitly selects a visible feature")
         }
     }
 
-    // #27: "Long-press Messenger" read as the Messenger title inside the app, where nothing happens.
-    @Test fun settingsDirectionsNameTheHomeScreenIcon() {
+    // Descriptions name the settings page, since "Long-press Messenger" (#27) read as the title inside the app.
+    @Test fun settingsDirectionsNameTheSettingsPage() {
         val patches = Class.forName("app.hushmessenger.patches.controls.MessengerControlsPatchKt").methods
             .filter { it.name.startsWith("get") && it.returnType == BytecodePatch::class.java }
             .map { it.invoke(null) as BytecodePatch }.filter { it.name != null }
-        val directed = patches.filter { "Patch controls" in it.description.orEmpty() }
-        assertEquals(30, directed.size)
+        val directed = patches.filter { "HushMessenger settings > Controls" in it.description.orEmpty() }
+        assertEquals(ExpectedTotals.DIRECTED_CONTROLS, directed.size)
         for (patch in directed) {
-            assertTrue("Long-press Messenger's home screen icon > Patch controls." in patch.description!!, "${patch.name}")
+            assertTrue("Turn it on in HushMessenger settings > Controls." in patch.description!!, "${patch.name}")
         }
     }
 
@@ -97,6 +102,101 @@ class ExpandedControlsTest {
         }
     }
 
+    /**
+     * Runs a gate's straight-line code against one composite's cache field. The switch is what Settings.enabled answers;
+     * static fields read as their own names, so Messenger's markers compare by identity like the real ones.
+     */
+    private class GateRun(val method: MutableMethod) {
+        val fields = mutableMapOf<String, Any?>()
+        var switchOn = false
+        var switchReads = 0
+
+        fun call(): Boolean {
+            val code = method.implementation!!.instructions.toList()
+            val addresses = code.runningFold(0) { address, instruction -> address + instruction.codeUnits }
+            val registers = arrayOfNulls<Any>(method.implementation!!.registerCount)
+            var result: Any? = null
+            var i = 0
+            fun jump(instruction: Instruction) { i = addresses.indexOf(addresses[i] + (instruction as OffsetInstruction).codeOffset) }
+            while (true) {
+                val instruction = code[i]
+                val a = (instruction as? OneRegisterInstruction)?.registerA
+                val reference = (instruction as? ReferenceInstruction)?.reference?.toString()
+                when (instruction.opcode) {
+                    Opcode.IGET_OBJECT -> registers[a!!] = fields[reference]
+                    Opcode.IPUT_OBJECT -> fields[reference!!] = registers[a!!]
+                    Opcode.SGET_OBJECT -> registers[a!!] = reference!!.intern()
+                    Opcode.CONST_STRING -> registers[a!!] = (instruction as ReferenceInstruction).reference.toString()
+                    Opcode.CONST_4 -> registers[a!!] = (instruction as NarrowLiteralInstruction).narrowLiteral
+                    Opcode.INVOKE_STATIC -> {
+                        assertEquals("$SETTINGS->enabled(Ljava/lang/String;)Z", reference)
+                        switchReads++
+                        result = if (switchOn) 1 else 0
+                    }
+                    Opcode.MOVE_RESULT -> registers[a!!] = result
+                    Opcode.IF_EQZ, Opcode.IF_NEZ -> {
+                        val zero = registers[a!!].let { it == null || it == 0 }
+                        if (zero == (instruction.opcode == Opcode.IF_EQZ)) { jump(instruction); continue }
+                    }
+                    Opcode.IF_EQ -> {
+                        val two = instruction as TwoRegisterInstruction
+                        if (registers[two.registerA] === registers[two.registerB]) { jump(instruction); continue }
+                    }
+                    Opcode.RETURN -> return registers[a!!] == 1
+                    else -> fail("unexpected ${instruction.opcode}")
+                }
+                i++
+            }
+        }
+    }
+
+    /** Messenger's shape: decide once, cache the marker in the composite, then answer from the cache. */
+    private val cachingGate = """
+        iget-object v0, p0, Lfixture/Gate;->cache:Ljava/lang/Object;
+        const/4 v6, 0x1
+        const/4 v5, 0x0
+        if-nez v0, :cached
+        sget-object v0, LX/1dj;->A02:Ljava/lang/Object;
+        iput-object v0, p0, Lfixture/Gate;->cache:Ljava/lang/Object;
+        :cached
+        iget-object v1, p0, Lfixture/Gate;->cache:Ljava/lang/Object;
+        sget-object v0, LX/1dj;->A03:Ljava/lang/Object;
+        if-eq v1, v0, :disabled
+        return v6
+        :disabled
+        return v5
+    """.trimIndent()
+
+    // #30: the inbox lists its suppliers' keys and registers their listeners on first use and removes them in later
+    // calls, so a gate that changed its answer mid-composite left suggestion work registered with nothing to remove it.
+    @Test fun pluginGateKeepsOneAnswerForTheLifeOfItsComposite() {
+        val hidden = GateRun(method("Lfixture/Gate;", "gate", 8, "Z", cachingGate).apply { injectPluginGate("people") })
+        hidden.switchOn = true
+        assertFalse(hidden.call())
+        assertEquals("LX/1dj;->A03:Ljava/lang/Object;", hidden.fields["Lfixture/Gate;->cache:Ljava/lang/Object;"])
+        hidden.switchOn = false
+        assertFalse(hidden.call(), "turning the switch off reopened a composite that already left the plugin out")
+        assertEquals(1, hidden.switchReads)
+
+        val shown = GateRun(method("Lfixture/Gate;", "gate", 8, "Z", cachingGate).apply { injectPluginGate("people") })
+        assertTrue(shown.call())
+        assertEquals("LX/1dj;->A02:Ljava/lang/Object;", shown.fields["Lfixture/Gate;->cache:Ljava/lang/Object;"])
+        shown.switchOn = true
+        assertTrue(shown.call(), "turning the switch on removed a plugin the composite had already started")
+
+        // The next composite reads the switch again.
+        val next = GateRun(method("Lfixture/Gate;", "gate", 8, "Z", cachingGate).apply { injectPluginGate("people") })
+        next.switchOn = true
+        assertFalse(next.call())
+    }
+
+    @Test fun pluginGateLatchRejectsAChangedGateBeforeEditing() {
+        val changed = method("Lfixture/Gate;", "gate", 8, "Z", cachingGate.replace("if-eq", "if-ne"))
+        val original = changed.implementation!!.instructions.toList()
+        assertFailsWith<PatchException> { changed.injectPluginGate("people") }
+        assertEquals(original, changed.implementation!!.instructions.toList())
+    }
+
     @Test fun pluginPolarityConstantsCannotAliasOrBeOverwritten() {
         val body = """
             iget-object v0, p0, Lfixture/Gate;->cache:Ljava/lang/Object;
@@ -120,53 +220,74 @@ class ExpandedControlsTest {
         }
     }
 
-    @Test fun adExitReplacementCoversIncomingBranchesAndPreservesTheOriginalResultRegister() {
-        val body = "goto/16 :first_exit\n" + "nop\n".repeat(915) + ":first_exit\nreturn-object v5\n" +
-            "nop\n".repeat(14) + "return-object v5\n" + "nop\n".repeat(3)
-        val method = method("LX/2Wl;", "D2i", 24, IMMUTABLE_LIST, body)
-        method.injectAdFilter()
-        val code = method.implementation!!.instructions
-        val branchAddress = (code[0] as OffsetInstruction).codeOffset
-        val addresses = code.runningFold(0) { address, instruction -> address + instruction.codeUnits }
-        val target = code[addresses.indexOf(branchAddress)]
-        assertEquals(Opcode.INVOKE_STATIC, target.opcode)
-        assertEquals("$SETTINGS->filterInboxAds(Ljava/util/List;)Ljava/util/List;", (target as ReferenceInstruction).reference.toString())
-        assertEquals(2, code.count { (it as? ReferenceInstruction)?.reference.toString().contains("->filterInboxAds(") })
-        for (index in code.indices.filter { code[it].opcode == Opcode.IF_EQZ }) {
-            val returnAddress = addresses[index] + (code[index] as OffsetInstruction).codeOffset
-            val returnInstruction = code[addresses.indexOf(returnAddress)]
-            assertEquals(Opcode.RETURN_OBJECT, returnInstruction.opcode)
-            assertEquals(5, (returnInstruction as com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction).registerA)
+    @Test fun compatReportRefusesEveryPluginGateThePatchRefuses() {
+        // CompatReport checks the gates' shape where it reads their sentinel, so a refused gate fails the profile there.
+        val body = """
+            iget-object v0, p0, Lfixture/Gate;->cache:Ljava/lang/Object;
+            const/4 v6, 0x1
+            const/4 v5, 0x0
+            iget-object v1, p0, Lfixture/Gate;->cache:Ljava/lang/Object;
+            sget-object v0, LX/1dj;->A03:Ljava/lang/Object;
+            if-eq v1, v0, :disabled
+            return v6
+            :disabled
+            return v5
+        """.trimIndent()
+        fun takenBy(text: String): Pair<Boolean, Boolean> {
+            val gate = method("Lfixture/Gate;", "gate", 8, "Z", text)
+            return runCatching { gate.validatePluginGate() }.isSuccess to CompatMirror.pluginGate(gate)
         }
-        assertFailsWith<PatchException> {
-            method("LX/2Wl;", "D2i", 24, IMMUTABLE_LIST, body.replace("return-object v5", "return-object v6")).injectAdFilter()
-        }
+        assertEquals(true to true, takenBy(body))
+        for (changed in listOf(
+            body.replace("if-eq", "if-ne"),
+            body.replace("return v5", "return v6"),
+            body.replace("v5", "v6"),
+            body.replace("iget-object v1", "const/4 v6, 0x0\niget-object v1"),
+            body.replace("iget-object v1", "const-wide/16 v4, 0x0\niget-object v1"),
+            body.replace("v6, 0x1", "v6, 0x0").replace("v5, 0x0", "v5, 0x1"),
+            body.replace("iget-object v1, p0, Lfixture/Gate;->cache", "iget-object v1, p0, Lfixture/Gate;->other"),
+            body.replace("iget-object v0, p0", "iget-object v2, p0"),
+        )) assertEquals(false to false, takenBy(changed), changed)
+
+        // 584.1 reuses the false register in a systrace handler that only rethrows; one that can reach a return can't.
+        val handled = body.replace("iget-object v1", "goto :check\nmove-exception v5\nthrow v5\n:check\niget-object v1")
+        assertEquals(true to true, takenBy(handled))
+        for (changed in listOf(
+            handled.replace("throw v5", "throw v1"),
+            handled.replace("throw v5", "return v5"),
+            handled.replace("throw v5", "const/4 v5, 0x1\nthrow v5"),
+            handled.replace("throw v5", "if-eqz v5, :disabled\nthrow v5"),
+        )) assertEquals(false to false, takenBy(changed), changed)
     }
 
-    @Test fun messenger581AdExitsEachKeepTheirOwnResultRegister() {
-        val body = "goto/16 :first_exit\n" + "nop\n".repeat(1449) + ":first_exit\nreturn-object v7\n" +
-            "nop\n".repeat(8) + "return-object v2\n" + "nop\n".repeat(3)
-        activeProfile = PROFILE_346213494
-        try {
-            val method = method("LX/2LJ;", "D3q", 24, IMMUTABLE_LIST, body)
-            method.injectAdFilter()
-            val code = method.implementation!!.instructions
-            val addresses = code.runningFold(0) { address, instruction -> address + instruction.codeUnits }
-            val filters = code.filter { (it as? ReferenceInstruction)?.reference.toString().contains("->filterInboxAds(") }
-            assertEquals(listOf(7, 2), filters.map { (it as FiveRegisterInstruction).registerC })
-            val kept = code.indices.filter { code[it].opcode == Opcode.IF_EQZ }.map { index ->
-                code[addresses.indexOf(addresses[index] + (code[index] as OffsetInstruction).codeOffset)]
-            }
-            assertEquals(listOf(7, 2), kept.map { (it as com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction).registerA })
-            for (changed in listOf(body.replace("return-object v2", "return-object v7"), body.replace("return-object v7", "return-object v5"))) {
-                assertFailsWith<PatchException> { method("LX/2LJ;", "D3q", 24, IMMUTABLE_LIST, changed).injectAdFilter() }
-            }
-        } finally {
-            activeProfile = BASE_PROFILE
+    @Test fun rethrowOnlyHandlersAreTheOnlyWritesTheGateCheckSkips() {
+        val handler = """
+            const/4 v1, 0x0
+            return v1
+            :handler
+            move-exception v5
+            invoke-static {}, LX/0Ap;->A00()V
+            throw v5
+        """.trimIndent()
+        fun skipped(text: String, tries: Boolean = false): Pair<Set<Int>, Set<Int>> {
+            val code = method("Lfixture/Gate;", "gate", 8, "Z", text).implementation!!.instructions.toList()
+            val start = code.take(2).sumOf { it.codeUnits }
+            val blocks = if (tries) listOf(ImmutableTryBlock(start, code[2].codeUnits + code[3].codeUnits,
+                listOf(ImmutableExceptionHandler(null, 0)))) else emptyList()
+            return rethrowOnlyWrites(code, blocks) to CompatMirror.rethrowOnlyWrites(code, blocks)
         }
+        assertEquals(setOf(2) to setOf(2), skipped(handler))
+        for (changed in listOf(
+            handler.replace("throw v5", "throw v1"),
+            handler.replace("throw v5", "return v5\nthrow v5"),
+            handler.replace("invoke-static {}, LX/0Ap;->A00()V", "if-eqz v5, :handler"),
+            handler.replace("const/4 v1", ":out\nconst/4 v1").replace("invoke-static {}, LX/0Ap;->A00()V", "goto :out"),
+            handler.replace("invoke-static {}, LX/0Ap;->A00()V", "const/4 v5, 0x0"),
+        )) assertEquals(emptySet<Int>() to emptySet(), skipped(changed), changed)
+        assertEquals(emptySet<Int>() to emptySet(), skipped(handler, tries = true), "a handler inside a try block can be caught again")
     }
 
-    // Mirrors the drawer case of Messenger 580's merged click listener: the row lands in a high register.
+    // Modelled on the drawer case of Messenger's merged click listener, where the row lands in a high register.
     private val folderClick = """
         move-object/from16 v3, p0
         iget-object v1, v3, LX/Jwp;->A00:Ljava/lang/Object;
@@ -208,6 +329,27 @@ class ExpandedControlsTest {
         assertEquals(original.drop(6), code.drop(11))
     }
 
+    @Test fun a5841ClickWithAnAlreadyTypedRowFieldNeedsNoCast() {
+        val method = fixtureMethod("LX/Jwp;->onClick(Landroid/view/View;)V", """
+            move-object/from16 v3, p0
+            iget-object v0, v3, LX/Jwp;->A01:LX/HRf;
+            move-object/from16 v16, v0
+            iget-object v0, v3, LX/Jwp;->A02:Ljava/lang/Object;
+            const-string v1, "$DRAWER_FOLDER_SELECTED"
+            return-void
+        """.trimIndent(), registers = 20)
+        method.injectMenuFolderClick("LX/HRf;")
+        val code = method.implementation!!.instructions.toList()
+        val call = code.filterIsInstance<RegisterRangeInstruction>().single {
+            (it as ReferenceInstruction).reference.toString() == "$SETTINGS->drawerFolderClicked(Ljava/lang/Object;)Ljava/lang/Object;"
+        }
+        assertEquals(16, call.startRegister)
+        assertTrue(code.any { instruction ->
+            instruction.opcode == Opcode.CHECK_CAST && (instruction as OneRegisterInstruction).registerA == 16 &&
+                ((instruction as ReferenceInstruction).reference as TypeReference).type == "LX/HRf;"
+        })
+    }
+
     @Test fun drawerFolderClickRejectsAMissingMarkerOrAnUnclearRowCast() {
         for (body in listOf(
             folderClick.replace(DRAWER_FOLDER_SELECTED, "HomeDrawerFragmentBase.somethingElse"),
@@ -229,12 +371,16 @@ class ExpandedControlsTest {
         val id = "LX/HFb;->Ax1(LX/0MG;)Ljava/util/ArrayList;"
         fun builder(rows: String) = fixtureMethod(id, rows + "const/4 v0, 0x0\nreturn-object v0", 10)
         assertEquals("LX/HRf;", builder(folderRow("LX/HRf;", settingsKey)).menuFolderItemType())
-        // 581 builds the QR code row in the same method, from the same row class and its own folder key.
+        // Messenger builds the QR code row in the same method, from the same row class and its own folder key.
         val both = builder(folderRow("LX/HRf;", settingsKey) + folderRow("LX/HRf;", qrKey))
         assertEquals("LX/HRf;", both.menuFolderItemType())
         assertEquals(2, both.settingsRowCall())
         for (changed in listOf(
+            // 582's main family built each row's icon in place, straight into the constructor's icon argument (v3).
+            // 583 creates no row icons in the builder, so one made there is refused.
+            "new-instance v3, LX/KGb;\n" + folderRow("LX/HRf;", settingsKey),
             folderRow("LX/HRf;", settingsKey) + "new-instance v2, LX/HRg;\n",
+            "new-instance v2, LX/KGb;\n" + folderRow("LX/HRf;", settingsKey),
             folderRow("LX/HRf;", settingsKey) + folderRow("LX/HRf;", settingsKey),
             folderRow("LX/HRf;", qrKey),
             "new-instance v1, LX/HRf;\n",
@@ -242,26 +388,13 @@ class ExpandedControlsTest {
         )) assertFailsWith<PatchException> { builder(changed).menuFolderItemType() }
     }
 
-    @Test fun keyboardTabFilterReplacesTheOnlyExitAndKeepsItsBranches() {
-        val body = "if-eqz v2, :done\nconst/4 v1, 0x0\n:done\nreturn-object v0"
-        val method = method("Lcom/facebook/messaging/msys/thread/composer/configuration/xapp/BaseXappComposerConfigurationFactory;",
-            "A0P", 8, IMMUTABLE_LIST, body)
-        method.injectKeyboardTabs()
-        val code = method.implementation!!.instructions.toList()
-        val addresses = code.runningFold(0) { address, instruction -> address + instruction.codeUnits }
-        // The early branch now lands on the filter call that replaced the original return.
-        val branchTarget = code[addresses.indexOf((code[0] as OffsetInstruction).codeOffset)]
-        assertEquals("$SETTINGS->filterKeyboardTabs(Ljava/util/List;)Ljava/util/List;", (branchTarget as ReferenceInstruction).reference.toString())
-        assertEquals(1, (code[3] as OneRegisterInstruction).registerA)
-        assertEquals(Opcode.IF_EQZ, code[4].opcode)
-        assertEquals(0, (code[6] as OneRegisterInstruction).registerA)
-        assertEquals(Opcode.RETURN_OBJECT, code.last().opcode)
-        assertEquals(0, (code.last() as OneRegisterInstruction).registerA)
-        assertEquals(addresses[code.size - 1], addresses[4] + (code[4] as OffsetInstruction).codeOffset)
-        assertFailsWith<PatchException> {
-            method("LX/Fixture;", "A0P", 8, IMMUTABLE_LIST, "if-eqz v2, :other\nreturn-object v0\n:other\nreturn-object v1").injectKeyboardTabs()
-        }
-        assertFailsWith<PatchException> { method("LX/Fixture;", "A0P", 1, IMMUTABLE_LIST, "return-object p0").injectKeyboardTabs() }
+    @Test fun anIconBuiltInPlaceBeforeThe5841SettingsRowIsAccepted() {
+        val id = "LX/HFb;->Ax1(LX/0MG;)Ljava/util/ArrayList;"
+        val icon = "sget-object v1, LX/1jj;->A66:LX/1jj;\nsget-object v3, LX/UD9;->A00:LX/UD9;\n" +
+            "new-instance v2, LX/KGb;\ninvoke-direct {v2, v1, v3}, LX/KGb;-><init>(LX/1jj;LX/UD9;)V\n" +
+            "move-object v3, v2\n"
+        val method = fixtureMethod(id, icon + folderRow("LX/HRf;", settingsKey) + "const/4 v0, 0x0\nreturn-object v0", 10)
+        assertEquals("LX/HRf;", method.menuFolderItemType())
     }
 
     @Test fun encryptedTypingFlagIsFilteredBeforeTheMailboxCallReadsIt() {
@@ -315,6 +448,75 @@ class ExpandedControlsTest {
         }
     }
 
+    @Test fun originalPhotoPicksTheJavaTranscoderAndSizesItsDecode() {
+        val config = fixtureMethod(TRANSCODE_CONFIG, TRANSCODE_CONFIG_BODY, registers = 16)
+        val stockConfig = config.implementation!!.instructions.toList()
+        config.injectOriginalPhoto()
+        val configCode = config.implementation!!.instructions.toList()
+        val pick = configCode[configCode.size - 2] as RegisterRangeInstruction
+        assertEquals("Lapp/hushmessenger/extension/OriginalPhoto;->transcodeConfig(Ljava/util/Map;)V", (pick as ReferenceInstruction).reference.toString())
+        assertEquals(2, pick.startRegister)
+        assertEquals(1, pick.registerCount)
+        assertEquals(Opcode.RETURN_OBJECT, configCode.last().opcode)
+        assertEquals(2, (configCode.last() as OneRegisterInstruction).registerA)
+        assertEquals(stockConfig.dropLast(1), configCode.dropLast(2))
+        // The branch that skipped the put still lands on the call, which took over the return's place.
+        assertTrue(configCode.size - 2 in config.jumpTargets())
+
+        val decode = fixtureMethod(DECODE_BITMAP, DECODE_BITMAP_BODY, registers = 22)
+        val stockDecode = decode.implementation!!.instructions.toList()
+        decode.injectOriginalPhoto()
+        val decodeCode = decode.implementation!!.instructions.toList()
+        // p1 to p5, the URL and the two limits, are v17 to v21; each new limit lands back in its own pair.
+        for ((at, name) in listOf(0 to "decodeWidth", 2 to "decodeHeight")) {
+            val call = decodeCode[at] as RegisterRangeInstruction
+            assertEquals("Lapp/hushmessenger/extension/OriginalPhoto;->$name(Ljava/lang/String;DD)D", (call as ReferenceInstruction).reference.toString())
+            assertEquals(17, call.startRegister)
+            assertEquals(5, call.registerCount)
+            assertEquals(Opcode.MOVE_RESULT_WIDE, decodeCode[at + 1].opcode)
+            assertEquals(if (at == 0) 18 else 20, (decodeCode[at + 1] as OneRegisterInstruction).registerA)
+        }
+        val swapped = decodeCode[5] as RegisterRangeInstruction
+        assertEquals("Lapp/hushmessenger/extension/OriginalPhoto;->decodeFile(Ljava/lang/String;)Landroid/graphics/Bitmap;",
+            (swapped as ReferenceInstruction).reference.toString())
+        assertEquals(11, swapped.startRegister)
+        assertEquals(1, swapped.registerCount)
+        assertEquals(stockDecode.filterIndexed { i, _ -> i != 1 }, decodeCode.drop(4).filterIndexed { i, _ -> i != 1 })
+
+        val customScale = fixtureMethod(DECODE_BITMAP,
+            DECODE_BITMAP_BODY.replace("Landroid/graphics/Bitmap;->createScaledBitmap", "LX/UKC;->A0G"), 22)
+        customScale.injectOriginalPhoto()
+        assertTrue(customScale.implementation!!.instructions.any {
+            (it as? ReferenceInstruction)?.reference?.toString() ==
+                "Lapp/hushmessenger/extension/OriginalPhoto;->decodeFile(Ljava/lang/String;)Landroid/graphics/Bitmap;"
+        })
+
+        // 587's helper always filters, so it drops createScaledBitmap's flag.
+        val noFlag = fixtureMethod(DECODE_BITMAP, DECODE_BITMAP_BODY.replace(
+            "invoke-static {v1, v2, v4, v5}, Landroid/graphics/Bitmap;->createScaledBitmap(Landroid/graphics/Bitmap;IIZ)Landroid/graphics/Bitmap;",
+            "invoke-static {v1, v2, v4}, LX/Yut;->A0G(Landroid/graphics/Bitmap;II)Landroid/graphics/Bitmap;"), 22)
+        noFlag.injectOriginalPhoto()
+        assertTrue(noFlag.implementation!!.instructions.any {
+            (it as? ReferenceInstruction)?.reference?.toString() ==
+                "Lapp/hushmessenger/extension/OriginalPhoto;->decodeFile(Ljava/lang/String;)Landroid/graphics/Bitmap;"
+        })
+
+        val refused = listOf(
+            TRANSCODE_CONFIG to TRANSCODE_CONFIG_BODY.replace("ENABLE_UIT_TRANSCODING", "ENABLE_UIT_V2"),
+            TRANSCODE_CONFIG to TRANSCODE_CONFIG_BODY.replace("return-object v2", "if-eqz v1, :again\nreturn-object v2\n:again\nreturn-object v2"),
+            DECODE_BITMAP to DECODE_BITMAP_BODY.replace("move-result-object v1\nmove-wide",
+                "move-result-object v1\ninvoke-static {v11}, Landroid/graphics/BitmapFactory;->decodeFile(Ljava/lang/String;)Landroid/graphics/Bitmap;\nmove-wide"),
+            DECODE_BITMAP to DECODE_BITMAP_BODY.replace(
+                "invoke-static {v1, v2, v4, v5}, Landroid/graphics/Bitmap;->createScaledBitmap(Landroid/graphics/Bitmap;IIZ)Landroid/graphics/Bitmap;",
+                "invoke-static {v1}, LX/Fixture;->scale(Landroid/graphics/Bitmap;)Landroid/graphics/Bitmap;"),
+            DECODE_BITMAP to ":top\n" + DECODE_BITMAP_BODY.replace("return-object v1", "if-eqz v1, :top\nreturn-object v1"),
+        )
+        for ((id, body) in refused) assertFailsWith<PatchException>(body) { fixtureMethod(id, body, registers = 22).injectOriginalPhoto() }
+        assertFailsWith<PatchException> {
+            fixtureMethod(DECODE_BITMAP, DECODE_BITMAP_BODY, registers = 22, flags = AccessFlags.PUBLIC.value or AccessFlags.STATIC.value).injectOriginalPhoto()
+        }
+    }
+
     @Test fun featureMetadataIsSpecificAndDuplicateSelectionIsRejected() {
         val document = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(ByteArrayInputStream(
             """<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application /></manifest>""".toByteArray(),
@@ -328,7 +530,7 @@ class ExpandedControlsTest {
             (metadata.item(it) as org.w3c.dom.Element).getAttribute("android:name")
         }.toSet())
         assertEquals(1, document.getElementsByTagName("provider").length)
-        assertEquals(4, document.getElementsByTagName("activity").length)
+        assertEquals(2, document.getElementsByTagName("activity").length)
         assertFailsWith<PatchException> { document.addFeature("people") }
     }
 }

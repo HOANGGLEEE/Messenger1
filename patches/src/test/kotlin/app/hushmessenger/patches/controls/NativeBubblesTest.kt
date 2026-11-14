@@ -25,7 +25,7 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class NativeBubblesTest {
-    @AfterTest fun reset() { activeProfile = BASE_PROFILE }
+    @AfterTest fun reset() { activeProfile = SYNTHETIC_PROFILE }
 
     @Test fun allFiveMappingsPreserveTheAccountAndSdkGuards() {
         for (profile in controlProfiles.values.toSet()) {
@@ -57,6 +57,40 @@ class NativeBubblesTest {
         }
     }
 
+    @Test fun familyBsInlinedEligibilityFollowsTheBubblesSwitchAndKeepsTheAccountCheck() {
+        val eligibility = bubbleEligibilityMethod()
+        val mode = inlinedBubbleModeMethod()
+        val capability = nativeBubbleRoutesMethod()
+        val oldMode = mode.implementation!!.instructions.toList()
+        assertEquals(listOf(mode.hookId()), mirroredControls(listOf(fixtureClass(mode.definingClass, listOf(mode))))
+            .getValue("bubble_mode").map { it.hookId() })
+        injectNativeBubbles(eligibility, mode, capability, true)
+
+        val c = mode.implementation!!.instructions.toList()
+        assertEquals("$SETTINGS->forceChatHeads()Z", (c[0] as ReferenceInstruction).reference.toString())
+        assertEquals(5, c.branchTarget(2))
+        // Picking Android bubbles skips the copied SDK and low-memory checks, as A00's own switch does in 348.
+        assertEquals("$SETTINGS->enableBubbles()Z", (c[7] as ReferenceInstruction).reference.toString())
+        assertEquals(21, c.branchTarget(9))
+        assertSame(oldMode[13], c[21])
+        assertEquals(activeProfile.bubbleCapabilityGetter, (c[27] as ReferenceInstruction).reference.toString())
+        assertEquals(BUBBLE_ROLLOUT, (c[37] as WideLiteralInstruction).wideLiteral)
+        assertEquals("$SETTINGS->nativeBubbleRollout(Z)Z", (c[41] as ReferenceInstruction).reference.toString())
+        // Every false branch still lands on return v2, the stock false.
+        assertEquals(listOf(44, 44, 44), listOf(c.branchTarget(12), c.branchTarget(20), c.branchTarget(29)))
+        assertEquals(2, (c[44] as OneRegisterInstruction).registerA)
+        assertEquals(oldMode, c.drop(5).take(2) + c.drop(10).take(31) + c.drop(43))
+    }
+
+    @Test fun familyBsInlinedEligibilityIsRefusedWhenItsChecksOrHolderMove() {
+        rejected(mode = inlinedBubbleModeMethod(sdk = 0x1d))
+        rejected(mode = inlinedBubbleModeMethod(holderOwner = "LX/Other;"))
+        rejected(mode = inlinedBubbleModeMethod().apply {
+            replaceInstruction(26, "invoke-static {v0}, LX/2w1;->A02(I)LX/5cX;")
+        })
+        rejected(mode = inlinedBubbleModeMethod().apply { replaceInstruction(34, "return v0") })
+    }
+
     private fun rejected(eligibility: MutableMethod = bubbleEligibilityMethod(), mode: MutableMethod = nativeBubbleModeMethod(),
                          capability: MutableMethod = nativeBubbleRoutesMethod()) {
         val targets = listOf(eligibility, mode, capability)
@@ -69,7 +103,7 @@ class NativeBubblesTest {
         for ((at, instruction) in listOf(
             10 to "const/16 v0, 0x1b",
             11 to "invoke-virtual {v1, p1, v0}, LX/1hy;->A04(${BUBBLE_SESSION}I)Z",
-            11 to "invoke-virtual {v1, p1, v2}, ${BASE_PROFILE.bubbleCapabilityGetter}",
+            11 to "invoke-virtual {v1, p1, v2}, ${SYNTHETIC_PROFILE.bubbleCapabilityGetter}",
             19 to "const-wide v0, ${BUBBLE_ROLLOUT + 1}L",
             21 to "invoke-interface {v2, v0, v1}, Lcom/facebook/mobileconfig/factory/MobileConfigUnsafeContext;->Wrong(J)Z",
             23 to "return v2",
@@ -87,11 +121,17 @@ class NativeBubblesTest {
 
     @Test fun discoveryRejectsAChangedFlagAndValidationRejectsAnAmbiguousGate() {
         val mode = nativeBubbleModeMethod()
-        fun found(vararg methods: MutableMethod) = findControls(listOf(fixtureClass(mode.definingClass, methods.toList())))
+        fun found(vararg methods: MutableMethod) = mirroredControls(listOf(fixtureClass(mode.definingClass, methods.toList())))
         assertEquals(listOf(mode.hookId()), found(mode).getValue("bubble_mode").map { it.hookId() })
         assertTrue(found(nativeBubbleModeMethod().apply {
             replaceInstruction(19, "const-wide v0, ${BUBBLE_ROLLOUT + 1}L")
         }).getValue("bubble_mode").isEmpty())
+        // 585's and 582's numbers for the same read are refused, even with every other instruction in place.
+        for (number in listOf(36312002867630111L, 36312020047499274L)) {
+            val old = nativeBubbleModeMethod().apply { replaceInstruction(19, "const-wide v0, ${number}L") }
+            assertTrue(found(old).getValue("bubble_mode").isEmpty(), "$number")
+            assertFailsWith<PatchException>("$number") { old.validateNativeBubbleMode() }
+        }
         // DEX class definitions deduplicate identical signatures, so ambiguity needs a distinct method.
         val duplicate = MutableMethod(ImmutableMethod(mode.definingClass, "anotherBubbleMode", mode.parameters,
             mode.returnType, mode.accessFlags, null, null, mode.implementation))
@@ -100,18 +140,13 @@ class NativeBubblesTest {
         assertFailsWith<PatchException> { validateControls(ambiguous, setOf("bubble_mode")) }
     }
 
-    @Test fun the581RolloutSpecifierIsTheOnlyOtherAcceptedFlagAndIsPatchedTheSameWay() {
-        val mode = nativeBubbleModeMethod().apply { replaceInstruction(19, "const-wide v0, ${BUBBLE_ROLLOUT_581}L") }
-        assertEquals(listOf(mode.hookId()), findControls(listOf(fixtureClass(mode.definingClass, listOf(mode))))
-            .getValue("bubble_mode").map { it.hookId() })
-        val before = mode.implementation!!.instructions.toList()
-        injectNativeBubbles(bubbleEligibilityMethod(), mode, nativeBubbleRoutesMethod(), true)
-        val c = mode.implementation!!.instructions.toList()
-        assertEquals(BUBBLE_ROLLOUT_581, (c[24] as WideLiteralInstruction).wideLiteral)
-        assertEquals("$SETTINGS->nativeBubbleRollout(Z)Z", (c[28] as ReferenceInstruction).reference.toString())
-        assertEquals(listOf(31, 31), listOf(c.branchTarget(9), c.branchTarget(18)))
-        assertEquals(before, c.drop(5).take(23) + c.drop(30))
-        rejected(mode = nativeBubbleModeMethod().apply { replaceInstruction(19, "const-wide v0, ${BUBBLE_ROLLOUT_581 + 1}L") })
+    @Test fun olderReleasesRolloutSpecifiersAreRefused() {
+        // Older releases' numbers for the same rollout read.
+        for (older in listOf(36312032932401152L, 36312028637433857L)) {
+            val mode = nativeBubbleModeMethod().apply { replaceInstruction(19, "const-wide v0, ${older}L") }
+            assertTrue(mirroredControls(listOf(fixtureClass(mode.definingClass, listOf(mode)))).getValue("bubble_mode").isEmpty())
+            rejected(mode = mode)
+        }
     }
 
     @Test fun absentNativeRoutesLeaveAllStockGatesAndTheCompiledCapabilityUntouched() {
@@ -158,18 +193,23 @@ class NativeBubblesTest {
     private val metadata = "Landroid/app/Notification${'$'}BubbleMetadata;"
     private val compatMetadata = "Lfixture/Metadata;"
     private val container = "Lfixture/Container;"
-    private val thread = "Lcom/facebook/messaging/model/threadkey/ThreadKey;"
+    /** 586 armv7's holder that carries the built shortcut into the container's constructor. */
+    private val holderType = "Lfixture/Holder;"
+    private val thread ="Lcom/facebook/messaging/model/threadkey/ThreadKey;"
     private val shortcut = "Landroid/content/pm/ShortcutInfo;"
     private val pending = "Landroid/app/PendingIntent;"
     private val field = "Lfixture/Notification;->bubble:$compatMetadata"
     private val idField = "Lfixture/Notification;->shortcut:Ljava/lang/String;"
     private val create = "Lfixture/Shortcut;->create(Landroid/content/Context;Landroid/graphics/Bitmap;${thread}Ljava/lang/String;)$container"
     private val updated = "Lfixture/Shortcut;->updated(Landroid/content/Context;Landroid/graphics/Bitmap;${thread}Ljava/lang/String;Z)$container"
+    /** 583's static helper that names the shortcut ID. */
+    private val shortcutKey = "Lfixture/Key;->id(${thread})Ljava/lang/String;"
     private val attach = "Lfixture/Attach;->attach(Landroid/graphics/Bitmap;Lfixture/Notification;${BUBBLE_SESSION}${container}Lfixture/Summary;Lfixture/Trace;Lfixture/Push;Z)V"
 
-    private fun routes(longLived: Int = 1, gate: String = BASE_PROFILE.hooks.getValue("bubble_mode").single(),
+    private fun routes(longLived: Int = 1, gate: String = SYNTHETIC_PROFILE.hooks.getValue("bubble_mode").single(),
                        shortcutIdApi: Boolean = true, alternate: Boolean = false,
-                       changed: String? = null, from: String = "", to: String = ""): List<com.android.tools.smali.dexlib2.iface.ClassDef> {
+                       changed: String? = null, from: String = "", to: String = "",
+                       holder: Boolean = false): List<com.android.tools.smali.dexlib2.iface.ClassDef> {
         fun method(id: String, body: String, registers: Int = 8, static: Boolean = false): MutableMethod {
             val code = body.trimIndent()
             if (id == changed) assertTrue(from in code, "The rejection fixture must change an existing instruction")
@@ -178,7 +218,7 @@ class NativeBubblesTest {
         }
         val shortcutCode = """
             const/4 v1, $longLived
-            const-string v0, "thread_shortcut_"
+            invoke-static {p3}, $shortcutKey
             new-instance v2, $shortcutBuilder
             invoke-direct {v2, p1, p4}, $shortcutBuilder-><init>(Landroid/content/Context;Ljava/lang/String;)V
             invoke-static {}, Lfixture/Shortcut;->person()Landroid/app/Person;
@@ -190,9 +230,18 @@ class NativeBubblesTest {
             invoke-virtual {v2, v0}, $shortcutBuilder->setIntent(Landroid/content/Intent;)$shortcutBuilder
             invoke-virtual {v2}, $shortcutBuilder->build()$shortcut
             move-result-object v0
+            ${if (holder) """
+            new-instance v2, $holderType
+            invoke-direct {v2}, $holderType-><init>()V
+            iput-object v0, v2, $holderType->info:$shortcut
+            new-instance v3, $container
+            invoke-direct {v3, v2, p3}, $container-><init>($holderType$thread)V
+            return-object v3
+            """ else """
             new-instance v2, $container
             invoke-direct {v2, v0, p3}, $container-><init>($shortcut$thread)V
             return-object v2
+            """}
         """.trimIndent()
         val called = if (alternate) updated else create
         val call = if (alternate) "invoke-virtual/range {v0 .. v5}, $called" else "invoke-virtual {v0, v1, v2, v3, v4}, $called"
@@ -201,7 +250,7 @@ class NativeBubblesTest {
             "L${BUBBLE_ACTIVITY.replace('.', '/')};->onPostResume()V", "invoke-virtual {v0, v1}, $gate\nreturn-void")),
             superclass = "Lcom/facebook/messaging/msys/thread/fragment/MsysThreadViewActivity;"),
         fixtureClass("Lfixture/Shortcut;", listOf(method(create, shortcutCode),
-            method(updated, shortcutCode.replace("thread_shortcut_", "updated"), 9),
+            method(updated, shortcutCode.replace("invoke-static {p3}, $shortcutKey", "const-string v0, \"updated\""), 9),
             method("Lfixture/Shortcut;->person()Landroid/app/Person;", "new-instance v0, Landroid/app/Person;\nreturn-object v0", static = true),
             method("Lfixture/Shortcut;->intent()Landroid/content/Intent;", "new-instance v0, Landroid/content/Intent;\nreturn-object v0", static = true))),
         fixtureClass("Lfixture/Attach;", listOf(method(attach, """
@@ -258,11 +307,18 @@ class NativeBubblesTest {
             move-result-object v0
             return-object v0
         """))),
-        fixtureClass(container, listOf(method("$container-><init>($shortcut$thread)V", """
+        fixtureClass(container, listOf(method("$container-><init>(${if (holder) holderType else shortcut}$thread)V", if (holder) """
+            iget-object v0, p1, $holderType->info:$shortcut
+            iput-object v0, p0, $container->info:$shortcut
+            iput-object p2, p0, $container->thread:$thread
+            return-void
+        """ else """
             iput-object p1, p0, $container->info:$shortcut
             iput-object p2, p0, $container->thread:$thread
             return-void
         """))),
+        *if (holder) arrayOf(fixtureClass(holderType, listOf(method("$holderType-><init>()V",
+            "invoke-direct {p0}, Ljava/lang/Object;-><init>()V\nreturn-void", 1)))) else emptyArray(),
         fixtureClass("Lfixture/Factory;", listOf(method("Lfixture/Factory;->make($container)Lfixture/Pack;", """
             iget-object v1, p0, $container->thread:$thread
             invoke-static {v1}, Lfixture/Factory;->pending($thread)$pending
@@ -301,29 +357,62 @@ class NativeBubblesTest {
             invoke-virtual {p1, p0}, $notificationBuilder->setBubbleMetadata($metadata)$notificationBuilder
             return-void
         """, 2, static = true))),
+        fixtureClass("Lfixture/Key;", listOf(method(shortcutKey, "const-string v0, \"thread_shortcut_\"\nreturn-object v0", 2, static = true))),
         )
     }
 
     @Test fun metadataShortcutAndMessagingStyleMustConnectToTheNativeActivity() {
-        val gate = BASE_PROFILE.hooks.getValue("bubble_mode").single()
+        val gate = SYNTHETIC_PROFILE.hooks.getValue("bubble_mode").single()
         val valid = routes()
-        assertNotNull(findNativeBubbleRoutes(valid, gate))
-        for (removed in valid.indices) assertNull(findNativeBubbleRoutes(valid.filterIndexed { at, _ -> at != removed }, gate))
-        assertNull(findNativeBubbleRoutes(routes(longLived = 0), gate))
-        assertNull(findNativeBubbleRoutes(routes(gate = gate.replace("A01", "A99")), gate))
-        assertNull(findNativeBubbleRoutes(routes(shortcutIdApi = false), gate))
-        assertNull(findNativeBubbleRoutes(valid + valid[1], gate))
+        assertNotNull(mirroredBubbleRoutes(valid, gate))
+        for (removed in valid.indices) assertNull(mirroredBubbleRoutes(valid.filterIndexed { at, _ -> at != removed }, gate))
+        assertNull(mirroredBubbleRoutes(routes(longLived = 0), gate))
+        assertNull(mirroredBubbleRoutes(routes(gate = gate.replace("A01", "A99")), gate))
+        assertNull(mirroredBubbleRoutes(routes(shortcutIdApi = false), gate))
+        assertNull(mirroredBubbleRoutes(valid + valid[1], gate))
+    }
+
+    @Test fun aShortcutHolderCopiedOntoTheContainerKeepsTheConnectedRoute() {
+        val gate = SYNTHETIC_PROFILE.hooks.getValue("bubble_mode").single()
+        // 586's armv7 build parks the built shortcut on a holder that the container's constructor copies from.
+        assertNotNull(mirroredBubbleRoutes(routes(holder = true), gate))
+        assertNull(mirroredBubbleRoutes(routes(holder = true, longLived = 0), gate))
+        assertNull(mirroredBubbleRoutes(routes(holder = true, shortcutIdApi = false), gate))
+        val holderCtor = "$container-><init>($holderType$thread)V"
+        // The holder takes something other than the built shortcut, or the container copies a field the shortcut isn't in.
+        assertNull(mirroredBubbleRoutes(routes(holder = true, changed = create,
+            from = "iput-object v0, v2, $holderType->info:$shortcut", to = "iput-object p4, v2, $holderType->info:$shortcut"), gate))
+        assertNull(mirroredBubbleRoutes(routes(holder = true, changed = holderCtor,
+            from = "iget-object v0, p1, $holderType->info:$shortcut", to = "iget-object v0, p1, $holderType->other:$shortcut"), gate))
+        // The container returned isn't the one built round the holder.
+        assertNull(mirroredBubbleRoutes(routes(holder = true, changed = create, from = "return-object v3", to = "return-object v2"), gate))
     }
 
     @Test fun verifiedShortcutOverloadsShareTheReturnedContainerContract() {
-        val gate = BASE_PROFILE.hooks.getValue("bubble_mode").single()
-        assertNotNull(findNativeBubbleRoutes(routes(alternate = true), gate))
-        assertNull(findNativeBubbleRoutes(routes(alternate = true, changed = updated,
+        val gate = SYNTHETIC_PROFILE.hooks.getValue("bubble_mode").single()
+        assertNotNull(mirroredBubbleRoutes(routes(alternate = true), gate))
+        assertNull(mirroredBubbleRoutes(routes(alternate = true, changed = updated,
             from = "const/4 v1, 1", to = "const/4 v1, 0"), gate))
     }
 
+    @Test fun theShortcutIdComesOnlyFromAStaticThreadKeyHelperThatNamesIt() {
+        val gate = SYNTHETIC_PROFILE.hooks.getValue("bubble_mode").single()
+        val call = "invoke-static {p3}, $shortcutKey"
+        assertNotNull(mirroredBubbleRoutes(routes(), gate))
+        // A builder that names the ID itself is the form before 583, which no supported build has.
+        assertNull(mirroredBubbleRoutes(routes(changed = create, from = call, to = "const-string v0, \"thread_shortcut_\""), gate))
+        assertNull(mirroredBubbleRoutes(routes(changed = shortcutKey, from = "thread_shortcut_", to = "other_"), gate))
+        assertNull(mirroredBubbleRoutes(routes(changed = create, from = call, to = "invoke-virtual {p3}, $shortcutKey"), gate))
+        val loose = "Lfixture/LooseKey;->id(Ljava/lang/Object;)Ljava/lang/String;"
+        assertNull(mirroredBubbleRoutes(routes(changed = create, from = call, to = "invoke-static {p3}, $loose") +
+            fixtureClass("Lfixture/LooseKey;", listOf(fixtureMethod(loose, "const-string v0, \"thread_shortcut_\"\nreturn-object v0", 2,
+                AccessFlags.PUBLIC.value or AccessFlags.STATIC.value))), gate))
+        // The helper has to be in the app; a call alone names nothing.
+        assertNull(mirroredBubbleRoutes(routes().filter { it.type != "Lfixture/Key;" }, gate))
+    }
+
     @Test fun aStaticGateHelperCountsOnlyWhenItReturnsTheGateForThePassedSession() {
-        val gate = BASE_PROFILE.hooks.getValue("bubble_mode").single()
+        val gate = SYNTHETIC_PROFILE.hooks.getValue("bubble_mode").single()
         val helper = "Lfixture/Gate;->read(${BUBBLE_SESSION}Lfixture/Lazy;)Z"
         val body = """
             iget-object v0, p1, Lfixture/Lazy;->A00:Lfixture/Provider;
@@ -337,9 +426,9 @@ class NativeBubblesTest {
         fun helperRoutes(code: String) = routes(changed = attach, from = "invoke-virtual {v0, p3}, $gate",
             to = "invoke-static {p3, v0}, $helper") + fixtureClass("Lfixture/Gate;",
             listOf(fixtureMethod(helper, code, 3, AccessFlags.PUBLIC.value or AccessFlags.STATIC.value)))
-        val direct = findNativeBubbleRoutes(routes(), gate)
+        val direct = mirroredBubbleRoutes(routes(), gate)
         assertNotNull(direct)
-        assertEquals(direct, findNativeBubbleRoutes(helperRoutes(body), gate))
+        assertEquals(direct, mirroredBubbleRoutes(helperRoutes(body), gate))
         for ((from, to) in listOf(
             "invoke-virtual {v0, p0}, $gate" to "invoke-virtual {v0, p0}, ${gate.replace("A01", "A99")}",
             "invoke-virtual {v0, p0}" to "invoke-virtual {v0, v0}",
@@ -348,7 +437,7 @@ class NativeBubblesTest {
             "return v0" to "const/4 v0, 0x1\nreturn v0",
         )) {
             assertTrue(from in body, "The rejection fixture must change an existing instruction")
-            assertNull(findNativeBubbleRoutes(helperRoutes(body.replace(from, to)), gate))
+            assertNull(mirroredBubbleRoutes(helperRoutes(body.replace(from, to)), gate))
         }
     }
 
@@ -356,7 +445,7 @@ class NativeBubblesTest {
         val body = fixtureMethod(attach, """
             const-string v0, "shouldAttachBubbleMetadataToNotification"
             const-string v0, "attach_bubble_metadata"
-            invoke-virtual {v0, p3}, ${BASE_PROFILE.hooks.getValue("bubble_mode").single()}
+            invoke-virtual {v0, p3}, ${SYNTHETIC_PROFILE.hooks.getValue("bubble_mode").single()}
             invoke-static {p4}, Lfixture/Factory;->make($container)Lfixture/Pack;
             move-result-object v0
             const/4 v1, 0
@@ -379,12 +468,12 @@ class NativeBubblesTest {
         val invalid = routes().map { cls -> if (cls.type != body.definingClass) cls else
             fixtureClass(cls.type, cls.methods.map { if (it.hookId() == attach) caught else it }.toList()) }
         val before = invalid.flatMap { it.methods.toList() }.map { it.implementation!!.instructions.toList() }
-        assertNull(findNativeBubbleRoutes(invalid, BASE_PROFILE.hooks.getValue("bubble_mode").single()))
+        assertNull(mirroredBubbleRoutes(invalid, SYNTHETIC_PROFILE.hooks.getValue("bubble_mode").single()))
         assertEquals(before, invalid.flatMap { it.methods.toList() }.map { it.implementation!!.instructions.toList() })
     }
 
     @Test fun nullAndDisconnectedValuesRejectRoutesBeforeAnyMutation() {
-        val gate = BASE_PROFILE.hooks.getValue("bubble_mode").single()
+        val gate = SYNTHETIC_PROFILE.hooks.getValue("bubble_mode").single()
         val cases = listOf(
             Triple(create, "invoke-virtual {v2, v0}, $shortcutBuilder->setPerson", "const/4 v0, 0\ninvoke-virtual {v2, v0}, $shortcutBuilder->setPerson"),
             Triple(create, "invoke-virtual {v2, v0}, $shortcutBuilder->setIntent", "const/4 v0, 0\ninvoke-virtual {v2, v0}, $shortcutBuilder->setIntent"),
@@ -408,7 +497,7 @@ class NativeBubblesTest {
             val invalid = routes(changed = id, from = from, to = to)
             val methods = invalid.flatMap { it.methods.toList() }
             val before = methods.map { it.implementation!!.instructions.toList() }
-            assertNull(findNativeBubbleRoutes(invalid, gate), id)
+            assertNull(mirroredBubbleRoutes(invalid, gate), id)
             assertEquals(before, methods.map { it.implementation!!.instructions.toList() })
             val targets = listOf(bubbleEligibilityMethod(), nativeBubbleModeMethod(), nativeBubbleRoutesMethod())
             val stock = targets.map { it.implementation!!.instructions.toList() }

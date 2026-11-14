@@ -1,12 +1,8 @@
 package app.hushmessenger.extension;
 
-import android.content.Intent;
-import android.graphics.Insets;
 import android.os.Bundle;
 import android.os.Looper;
 import android.view.View;
-import android.view.ViewGroup;
-import android.view.WindowInsets;
 import android.widget.EditText;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -19,6 +15,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
+import org.robolectric.annotation.GraphicsMode;
 import org.robolectric.shadows.ShadowToast;
 import static org.junit.Assert.*;
 
@@ -28,102 +25,150 @@ public class SettingsNavigationTest {
     @Before public void reset() {
         Settings.initialize(RuntimeEnvironment.getApplication());
         Settings.preferences.edit().clear().commit();
+        OpenSections.all();
     }
 
-    @Test public void unsentHistoryIsReachableFromTheFixedTopNavigation() {
+    /** HushFacebook's accordion: closed on a fresh install, one tap opens a section, and it stays open next time. */
+    @Test public void sectionsStartClosedOpenOnTapAndStayOpen() {
+        OpenSections.only();
         try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
             View root = screen.get().getWindow().getDecorView();
-            View history = root.findViewWithTag("tab_history");
-            assertNotNull("History must be reachable without scrolling to Privacy", history);
-            assertTrue(history.isShown());
-            assertNull("The old buried history link should not be duplicated in the control list",
-                root.findViewWithTag("unsent_history"));
-
-            history.performClick();
-            Intent opened = Shadows.shadowOf(screen.get()).getNextStartedActivity();
-            assertNotNull(opened);
-            boolean direct = opened.getComponent() != null &&
-                UnsentHistoryActivity.class.getName().equals(opened.getComponent().getClassName());
-            boolean hosted = opened.getComponent() != null &&
-                HostScreens.SCREEN_HOST.equals(opened.getComponent().getClassName()) &&
-                HostScreens.HISTORY.equals(opened.getStringExtra(HostScreens.EXTRA));
-            assertTrue("Top navigation should open the dedicated history screen", direct || hosted);
+            assertFalse(root.findViewWithTag("people").isShown());
+            View header = root.findViewWithTag("section_inbox");
+            assertTrue(header.isShown());
+            android.view.accessibility.AccessibilityNodeInfo info = header.createAccessibilityNodeInfo();
+            assertTrue(info.isHeading());
+            assertEquals(android.widget.Button.class.getName(), info.getClassName().toString());
+            // Named by the header itself, so TalkBack says the section and its count before "Button".
+            // The table's own case, not the capitals the heading is drawn in.
+            CharSequence tally = ((android.view.ViewGroup) header).getChildAt(1).getContentDescription();
+            assertNotNull(tally);
+            assertEquals(new SettingsText(screen.get()).get("inbox") + ". " + tally, info.getContentDescription().toString());
+            assertTrue(info.getActionList().contains(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_EXPAND));
+            assertFalse(info.getActionList().contains(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_COLLAPSE));
+            // TalkBack speaks the state from these actions, so a state description of our own would say it twice.
+            assertNull(info.getStateDescription());
+            header.performClick();
+            assertTrue(root.findViewWithTag("people").isShown());
+            info = header.createAccessibilityNodeInfo();
+            assertTrue(info.getActionList().contains(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_COLLAPSE));
+            assertFalse(info.getActionList().contains(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_EXPAND));
+            assertNull(info.getStateDescription());
+            // Opening a section is a view choice, not a setting: nothing reaches the saved choices.
+            assertEquals(java.util.Map.of(), Settings.preferences.getAll());
+            // A screen reader's collapse action closes it again.
+            assertTrue(header.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_COLLAPSE, null));
+            assertFalse(root.findViewWithTag("people").isShown());
+            header.performClick();
         }
-    }
-
-    @Test public void historyHeaderAppliesModernStatusBarInset() {
-        try (var screen = Robolectric.buildActivity(UnsentHistoryActivity.class).setup()) {
-            View content = screen.get().getWindow().findViewById(android.R.id.content);
-            View root = ((ViewGroup) content).getChildAt(0);
-            WindowInsets insets = new WindowInsets.Builder()
-                .setInsets(WindowInsets.Type.statusBars(), Insets.of(0, 64, 0, 0))
-                .setInsets(WindowInsets.Type.navigationBars(), Insets.of(0, 0, 0, 72))
-                .build();
-            root.dispatchApplyWindowInsets(insets);
-            int baseTop = Math.round(UnsentHistoryActivity.HISTORY_TOP_GAP_DP * screen.get().getResources().getDisplayMetrics().density);
-            assertEquals("History content must start below the Android status bar",
-                baseTop + 64, root.getPaddingTop());
-        }
-    }
-
-    @Test public void unsentHistoryHasCompactFiltersAndCollapsedDiagnostics() {
-        try (var screen = Robolectric.buildActivity(UnsentHistoryActivity.class).setup()) {
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
             View root = screen.get().getWindow().getDecorView();
-            assertNotNull(root.findViewWithTag("unsent_history_status"));
-            assertNotNull(root.findViewWithTag("unsent_history_clear"));
-            assertNotNull(root.findViewWithTag("unsent_history_filter_0"));
-            assertNotNull(root.findViewWithTag("unsent_history_filter_1"));
-            assertNotNull(root.findViewWithTag("unsent_history_filter_2"));
-            assertNotNull(root.findViewWithTag("unsent_history_filter_3"));
-            assertNotNull(root.findViewWithTag("unsent_history_list"));
-            View diagnostics = root.findViewWithTag("unsent_history_diagnostics");
-            assertNotNull(diagnostics);
-            assertEquals(View.GONE, diagnostics.getVisibility());
-            View search = findEditText(root);
-            assertNotNull("History should be searchable", search);
+            assertTrue(root.findViewWithTag("people").isShown());
+            assertFalse(root.findViewWithTag("typing").isShown());
+            root.findViewWithTag("tab_app").performClick();
+            assertFalse(root.findViewWithTag("light").isShown());
+            root.findViewWithTag("section_appearance").performClick();
+            assertTrue(root.findViewWithTag("light").isShown());
+            // Restart stays outside the sections, one tap away.
+            assertTrue(root.findViewWithTag("restart_messenger").isShown());
         }
     }
 
-    private static View findEditText(View view) {
-        if (view instanceof android.widget.EditText) return view;
-        if (view instanceof android.view.ViewGroup) {
-            android.view.ViewGroup group = (android.view.ViewGroup) view;
-            for (int i = 0; i < group.getChildCount(); i++) {
-                View found = findEditText(group.getChildAt(i));
-                if (found != null) return found;
-            }
-        }
-        return null;
-    }
-
-    @Test public void categoriesCombineWithSearchAndClearFiltersRecovers() {
+    /** A search shows every match whatever is closed, and clearing it puts the closed sections back. */
+    @Test public void searchOpensMatchingSectionsAndClearFiltersRecovers() {
+        OpenSections.only();
         try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
             View root = screen.get().getWindow().getDecorView();
             TextView count = root.findViewWithTag("search_status");
-            root.findViewWithTag("category_chats").performClick();
-            assertEquals("10 of 31 installed controls", count.getText().toString());
-            assertEquals(View.GONE, ((View) root.findViewWithTag("people").getParent()).getVisibility());
-            ((EditText) root.findViewWithTag("find_control")).setText("People You");
+            EditText search = root.findViewWithTag("find_control");
+            search.setText("People You May");
+            assertTrue(root.findViewWithTag("people").isShown());
+            assertEquals(ExpectedTotals.shown(1), count.getText().toString());
+            // A section closed during the search stays closed until the search changes.
+            root.findViewWithTag("section_inbox").performClick();
+            assertFalse(root.findViewWithTag("people").isShown());
+            search.setText("People You May Know");
+            assertTrue(root.findViewWithTag("people").isShown());
+            search.setText("no matching control");
             assertEquals(View.VISIBLE, root.findViewWithTag("empty_state").getVisibility());
             root.findViewWithTag("clear_filters").performClick();
-            assertEquals("31 of 31 installed controls", count.getText().toString());
+            assertEquals(ExpectedTotals.shown(ExpectedTotals.CONTROLS), count.getText().toString());
             assertEquals(View.GONE, root.findViewWithTag("empty_state").getVisibility());
-            assertTrue(root.findViewWithTag("category_all").isSelected());
-            root.findViewWithTag("category_more").performClick();
-            assertEquals("13 of 31 installed controls", count.getText().toString());
-            assertEquals(View.VISIBLE, ((View) root.findViewWithTag("facebook").getParent()).getVisibility());
+            assertFalse(root.findViewWithTag("people").isShown());
+            assertTrue(root.findViewWithTag("section_inbox").isShown());
         }
     }
 
-    @Test public void selectedChipIsFilledInBothThemesAndTheWordmarkStaysOnOneLine() {
+    /** A link or a release walk can ask for a section, so a row inside it is one tap away. */
+    @Test public void theOpenExtraOpensItsSection() {
+        OpenSections.only();
+        android.content.Intent intent = new android.content.Intent(RuntimeEnvironment.getApplication(), SettingsActivity.class)
+            .putExtra(SettingsActivity.OPEN_EXTRA, "inbox");
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class, intent).setup()) {
+            View root = screen.get().getWindow().getDecorView();
+            assertTrue(root.findViewWithTag("people").isShown());
+            assertFalse(root.findViewWithTag("typing").isShown());
+        }
+    }
+
+    @Test public void photoAndVideoControlsHaveTheirOwnSection() {
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            View root = screen.get().getWindow().getDecorView();
+            android.widget.LinearLayout group = root.findViewWithTag("photos_videos");
+            android.widget.LinearLayout heading = (android.widget.LinearLayout) group.getChildAt(0);
+            assertEquals("PHOTOS AND VIDEOS", ((TextView) heading.getChildAt(0)).getText().toString());
+            for (String key : new String[] {"original_photo", "original_video", "xhe_audio", "recent_media", "save_voice", "save_voice_menu", "share_story", "system_camera", "external_gallery", "gallery_to_chat", "instant_gallery"})
+                assertTrue(key + " should sit in Photos and videos", inside(root.findViewWithTag(key), group));
+            assertFalse(inside(root.findViewWithTag("typing"), group));
+            assertEquals(View.VISIBLE, group.getVisibility());
+            assertEquals("11",((TextView) heading.getChildAt(1)).getText().toString());
+        }
+    }
+
+    /** English headings keep English capitals on a phone whose own would dot the I, here Azerbaijani, which has no table. */
+    @Test @org.robolectric.annotation.Config(qualifiers = "az-rAZ") public void headingsUseEnglishCapitalsOnATurkishPhone() {
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            assertEquals("LINKS AND BUBBLES", heading(screen.get(), "links_bubbles"));
+            assertEquals("PRIVACY", heading(screen.get(), "privacy"));
+        }
+    }
+
+    /** Turkish headings take Turkish capitals: the i in Gizlilik keeps its dot. */
+    @Test @org.robolectric.annotation.Config(qualifiers = "tr-rTR") public void turkishHeadingsUseTurkishCapitals() {
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            assertEquals("BAĞLANTILAR VE BALONLAR", heading(screen.get(), "links_bubbles"));
+            assertEquals("G" + DOTTED_I + "ZL" + DOTTED_I + "L" + DOTTED_I + "K", heading(screen.get(), "privacy"));
+        }
+    }
+
+    /** Turkish capital dotted I, written by number so the source stays plain. */
+    private static final char DOTTED_I = (char) 0x0130;
+
+    private static String heading(SettingsActivity activity, String section) {
+        android.widget.LinearLayout group = activity.getWindow().getDecorView().findViewWithTag(section);
+        android.widget.LinearLayout heading = (android.widget.LinearLayout) group.getChildAt(0);
+        return ((TextView) heading.getChildAt(0)).getText().toString();
+    }
+
+    private static boolean inside(View view, View group) {
+        for (android.view.ViewParent parent = view.getParent(); parent != null; parent = parent.getParent())
+            if (parent == group) return true;
+        return false;
+    }
+
+    @Test public void selectedTabIsMessengerBlueInBothThemesAndTheWordmarkStaysOnOneLine() {
         for (boolean light : new boolean[] {false, true}) {
             Settings.preferences.edit().putBoolean("light", light).commit();
             try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
                 View root = screen.get().getWindow().getDecorView();
                 SettingsUi ui = new SettingsUi(screen.get(), light);
-                assertEquals(ui.accent, ui.selected);
-                assertEquals(light ? 0xffffffff : ui.background, ((TextView) root.findViewWithTag("category_all")).getCurrentTextColor());
-                assertEquals(ui.muted, ((TextView) root.findViewWithTag("category_inbox")).getCurrentTextColor());
+                // Messenger's own button blue, with white text, in both themes.
+                assertEquals(0xff0866ff, ui.accentFill);
+                assertEquals(ui.accentFill, ui.selected);
+                assertEquals(0xffffffff, ((TextView) root.findViewWithTag("tab_controls")).getCurrentTextColor());
+                assertEquals(ui.muted, ((TextView) root.findViewWithTag("tab_app")).getCurrentTextColor());
+                // The banner and its "Make Messenger yours" line are gone: the toolbar is the name and the tabs.
+                assertFalse(SettingsText.ENGLISH.containsKey("tagline"));
                 TextView wordmark = root.findViewWithTag("wordmark");
                 assertEquals(1, wordmark.getMaxLines());
                 assertEquals(TextView.AUTO_SIZE_TEXT_TYPE_UNIFORM, wordmark.getAutoSizeTextType());
@@ -131,15 +176,31 @@ public class SettingsNavigationTest {
         }
     }
 
+    @Test public void clearingTheQueryReturnsFocusToSearch() {
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            View root = screen.get().getWindow().getDecorView();
+            EditText search = root.findViewWithTag("find_control");
+            View clear = root.findViewWithTag("clear_query");
+            assertEquals(View.GONE, clear.getVisibility());
+            search.setText("no matching control");
+            assertEquals(View.VISIBLE, clear.getVisibility());
+            clear.performClick();
+            assertEquals("", search.getText().toString());
+            assertEquals(ExpectedTotals.shown(ExpectedTotals.CONTROLS), ((TextView) root.findViewWithTag("search_status")).getText().toString());
+            assertTrue(search.hasFocus());
+            assertEquals(View.GONE, clear.getVisibility());
+        }
+    }
+
     @Test public void theRecreatedPageReplacesTheThemeSwitchToast() {
         try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
             ((Switch) screen.get().getWindow().getDecorView().findViewWithTag("light")).performClick();
             Toast themeToast = ShadowToast.getLatestToast();
-            assertEquals("Light theme on", ShadowToast.getTextOfLatestToast());
+            assertEquals("Light theme is on", ShadowToast.getTextOfLatestToast());
             Shadows.shadowOf(Looper.getMainLooper()).idle();
             ((Switch) screen.get().getWindow().getDecorView().findViewWithTag("people")).performClick();
             assertTrue(Shadows.shadowOf(themeToast).isCancelled());
-            assertEquals("Hide People You May Know on", ShadowToast.getTextOfLatestToast());
+            assertEquals("Hide People You May Know is on", ShadowToast.getTextOfLatestToast());
         }
     }
 
@@ -148,8 +209,8 @@ public class SettingsNavigationTest {
         try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
             View root = screen.get().getWindow().getDecorView();
             ((Switch) root.findViewWithTag("people")).performClick();
-            root.findViewWithTag("category_inbox").performClick();
-            ((EditText) root.findViewWithTag("find_control")).setText("People You");
+            // Each word on its own: "People You" alone also finds Hide growth prompts ("people", "your").
+            ((EditText) root.findViewWithTag("find_control")).setText("People You May");
             root.findViewWithTag("tab_app").performClick();
             assertEquals(View.GONE, root.findViewWithTag("controls_page").getVisibility());
             assertEquals(View.VISIBLE, root.findViewWithTag("app_page").getVisibility());
@@ -163,9 +224,8 @@ public class SettingsNavigationTest {
             View root = screen.get().getWindow().getDecorView();
             assertEquals(View.VISIBLE, root.findViewWithTag("app_page").getVisibility());
             root.findViewWithTag("tab_controls").performClick();
-            assertEquals("People You", ((EditText) root.findViewWithTag("find_control")).getText().toString());
-            assertTrue(root.findViewWithTag("category_inbox").isSelected());
-            assertEquals("1 of 31 installed controls", ((TextView) root.findViewWithTag("search_status")).getText().toString());
+            assertEquals("People You May", ((EditText) root.findViewWithTag("find_control")).getText().toString());
+            assertEquals(ExpectedTotals.shown(1), ((TextView) root.findViewWithTag("search_status")).getText().toString());
             assertTrue(((Switch) root.findViewWithTag("people")).isChecked());
             assertTrue(Settings.enabled("people"));
         }
@@ -200,7 +260,20 @@ public class SettingsNavigationTest {
                 assertTrue(control.getMinimumWidth() >= 48 * density);
                 assertTrue(((View) control.getParent()).getPaddingTop() > 0);
             }
-            assertTrue(root.findViewWithTag("ads").getContentDescription().toString().contains("Experimental"));
+            for (String key : SettingsActivity.EXPERIMENTAL) {
+                assertTrue(key, root.findViewWithTag(key).getContentDescription().toString().contains("Experimental"));
+            }
+        }
+    }
+
+    @Test public void aButtonWithAShortLabelIsStillA48dpTapTarget() {
+        var app = RuntimeEnvironment.getApplication();
+        float density = app.getResources().getDisplayMetrics().density;
+        SettingsUi ui = new SettingsUi(app, false);
+        for (android.widget.Button button : new android.widget.Button[] {ui.button("OK"), ui.primaryButton("OK")}) {
+            button.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+            assertTrue(button.getMeasuredWidth() + " px", button.getMeasuredWidth() >= 48 * density);
+            assertTrue(button.getMeasuredHeight() + " px", button.getMeasuredHeight() >= 48 * density);
         }
     }
 
@@ -224,5 +297,91 @@ public class SettingsNavigationTest {
             root.findViewWithTag("tab_app").performClick();
             assertEquals(View.VISIBLE, root.findViewWithTag("app_page").getVisibility());
         }
+    }
+
+    // #157: on a 411 dp phone at a 1.15 font scale, Put gallery picks in the chat left its badge a sliver and
+    // Experimental wrapped two letters per line into a tall empty bar beside the title.
+    @Test @Config(sdk = 36) @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    public void experimentalBadgesStayOneWholeLineBesideOrUnderTheirTitles() {
+        RuntimeEnvironment.setQualifiers("w411dp-h891dp-xxhdpi");
+        RuntimeEnvironment.setFontScale(1.15f);
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            View root = screen.get().getWindow().getDecorView();
+            root.measure(View.MeasureSpec.makeMeasureSpec(411 * 3, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(891 * 3, View.MeasureSpec.EXACTLY));
+            root.layout(0, 0, 411 * 3, 891 * 3);
+            int checked = 0, stacked = 0;
+            for (String key : SettingsActivity.EXPERIMENTAL) {
+                TextView badge = root.findViewWithTag("badge_" + key);
+                if (badge == null || badge.getWidth() == 0) continue;
+                SettingsUi.TitleLine line = root.findViewWithTag("title_line_" + key);
+                stacked += badgeSitsWhole(key, line, badge) ? 0 : 1;
+                checked++;
+            }
+            assertTrue(checked + " rows", checked >= 10);
+            assertTrue(root.<View>findViewWithTag("badge_gallery_to_chat").getWidth() > 0);
+            assertTrue("no long title moved its badge under it", stacked > 0);
+            assertTrue("every badge moved under its title", stacked < checked);
+        }
+    }
+
+    @Test @Config(sdk = 36) @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    public void aBadgeGoesUnderItsTitleOnlyWhenTheTwoDontFitSideBySide() {
+        // Under 360 dp the page uses its large-text layout, so a phone-sized screen.
+        RuntimeEnvironment.setQualifiers("w411dp-h891dp-xxhdpi");
+        SettingsUi ui = new SettingsUi(RuntimeEnvironment.getApplication(), false);
+        SettingsUi.TitleLine line = ui.titleLine();
+        line.addView(ui.text("Put gallery picks in the chat", 16, ui.text, true), new android.widget.LinearLayout.LayoutParams(-2, -2));
+        TextView badge = ui.text("Experimental", 11, ui.warning, false);
+        line.badge(badge);
+        boolean wasBeside = false;
+        for (int width = 120; width <= 480; width += 20) {
+            line.measure(View.MeasureSpec.makeMeasureSpec(ui.dp(width), View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+            line.layout(0, 0, line.getMeasuredWidth(), line.getMeasuredHeight());
+            boolean beside = badgeSitsWhole(width + " dp", line, badge);
+            // A narrow 120 dp line stacks them, a wide 480 dp one has room for both, and widening never stacks them again.
+            if (width == 120) assertFalse(beside);
+            if (width == 480) assertTrue(beside);
+            assertFalse(width + " dp stacked again", wasBeside && !beside);
+            wasBeside = beside;
+        }
+        // Narrowing it again puts the badge back under the title at the line's start, not indented by the old gap.
+        line.measure(View.MeasureSpec.makeMeasureSpec(ui.dp(120), View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        line.layout(0, 0, line.getMeasuredWidth(), line.getMeasuredHeight());
+        assertFalse(badgeSitsWhole("120 dp again", line, badge));
+        assertEquals(0, badge.getLeft());
+        // Large text keeps its own layout: the badge always under the title, at the line's start.
+        RuntimeEnvironment.setFontScale(1.5f);
+        SettingsUi large = new SettingsUi(RuntimeEnvironment.getApplication(), false);
+        SettingsUi.TitleLine stacked = large.titleLine();
+        stacked.addView(large.text("Landscape", 16, large.text, true), new android.widget.LinearLayout.LayoutParams(-2, -2));
+        TextView stackedBadge = large.text("Experimental", 11, large.warning, false);
+        stacked.badge(stackedBadge);
+        stacked.measure(View.MeasureSpec.makeMeasureSpec(large.dp(480), View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        stacked.layout(0, 0, stacked.getMeasuredWidth(), stacked.getMeasuredHeight());
+        assertFalse(badgeSitsWhole("large text", stacked, stackedBadge));
+        assertEquals(0, stackedBadge.getLeft());
+    }
+
+    /** Asserts the badge reads as one whole line, beside a one-line title or under the title; true when beside. */
+    private static boolean badgeSitsWhole(String what, SettingsUi.TitleLine line, TextView badge) {
+        TextView title = (TextView) line.getChildAt(0);
+        assertEquals(what, 1, badge.getLayout().getLineCount());
+        assertTrue(what + " badge cut to " + badge.getWidth() + " px",
+            badge.getWidth() >= badge.getPaddingLeft() + badge.getPaddingRight() + badge.getLayout().getLineWidth(0));
+        assertTrue(what + " badge spills past its line", badge.getRight() <= line.getWidth());
+        if (line.sideBySide()) {
+            assertEquals(what, 1, title.getLayout().getLineCount());
+            // Beside it, the badge keeps an 8 dp gap from the title, even on a line that was stacked before.
+            int gap = (int) (8 * line.getResources().getDisplayMetrics().density);
+            assertTrue(what + " badge " + (badge.getLeft() - title.getRight()) + " px from its title",
+                badge.getLeft() - title.getRight() >= gap);
+            return true;
+        }
+        assertTrue(what, badge.getTop() >= title.getBottom());
+        return false;
     }
 }

@@ -2,7 +2,8 @@
  * Wallpaper palette engine for the Material You theme.
  *
  * Pure colour science: three families of thirteen tones (accent, neutral, neutral variant) from
- * Android 12's wallpaper palette, with a fixed blue fallback for Android 11. The sameLightness
+ * Android 12's wallpaper palette, with a fixed blue fallback for Android 11, and Material's palette
+ * styles (tonal spot, vibrant, expressive and the rest) rebuilt from either. The sameLightness
  * method answers the palette's colour at the CIE L* of a given colour, preserving contrast.
  *
  * Ported from Hushfacebook (GPL-3.0).
@@ -109,6 +110,96 @@ public final class TonePalette {
         return new TonePalette(tones, true);
     }
 
+    /** How tinted the neutrals of a one-colour palette are, close to Material's tonal spot. */
+    static final double NEUTRAL_CHROMA = 6;
+
+    /**
+     * A palette from a theme's two colours (#115). Each family keeps its colour's hue at every tone,
+     * as colourful as that colour or as sRGB allows at the tone, whichever is less. The neutral
+     * variant is the neutral family.
+     */
+    public static TonePalette fromSeeds(int accent, int neutral) {
+        int[] neutrals = family(neutral, Double.MAX_VALUE);
+        return new TonePalette(new int[][]{family(accent, Double.MAX_VALUE), neutrals, neutrals}, false);
+    }
+
+    /** A palette from an accent alone: its neutrals take the accent's hue, barely tinted. */
+    public static TonePalette fromAccent(int accent) {
+        int[] neutrals = family(accent, NEUTRAL_CHROMA);
+        return new TonePalette(new int[][]{family(accent, Double.MAX_VALUE), neutrals, neutrals}, false);
+    }
+
+    /**
+     * The palette styles (#155), named as Android's wallpaper picker names them. "default" keeps the phone's palette, or
+     * the saved theme's, as it is.
+     */
+    static final String[] STYLES = {"default", "tonal_spot", "neutral", "vibrant", "expressive", "rainbow", "fruit_salad", "monochrome"};
+
+    /**
+     * Each style after "default", as Material's colour utilities define it: the accent's hue turn in degrees and its
+     * chroma, then the neutrals' hue turn and the neutral and neutral variant chroma. 200 asks for as much colour as
+     * sRGB holds at each tone. Lab chroma stands in for Material's CAM16 chroma, as NEUTRAL_CHROMA does.
+     */
+    private static final double[][] STYLE_SPECS = {
+            {0, 36, 0, 6, 8},
+            {0, 12, 0, 2, 2},
+            {0, 200, 0, 10, 12},
+            {240, 40, 15, 8, 12},
+            {0, 48, 0, 0, 0},
+            {-50, 48, 0, 10, 16},
+            {0, 0, 0, 0, 0},
+    };
+
+    /** Below this Lab chroma an accent has no hue worth keeping, as a grey or monochrome wallpaper gives. */
+    static final double GREY_SEED = 4;
+
+    /**
+     * This palette in a Material style (#155). The accent and both neutrals are rebuilt from the hue of the accent's
+     * tone 40, turned and as colourful as the style asks. A grey accent has no hue, so it takes Messenger's blue's, the
+     * way Android falls back to a blue for a grey wallpaper. "default", or a style this version doesn't know, keeps
+     * the palette as it is.
+     */
+    TonePalette styled(String style) {
+        int index = style == null ? -1 : Arrays.asList(STYLES).indexOf(style);
+        if (index < 1) return this;
+        double[] spec = STYLE_SPECS[index - 1];
+        double[] seed = lab(tone(ACCENT, 40));
+        if (Math.hypot(seed[1], seed[2]) < GREY_SEED) seed = lab(ThemeFile.MESSENGER_BLUE);
+        double hue = Math.atan2(seed[2], seed[1]);
+        return new TonePalette(new int[][]{
+                hueFamily(hue + Math.toRadians(spec[0]), spec[1]),
+                hueFamily(hue + Math.toRadians(spec[2]), spec[3]),
+                hueFamily(hue + Math.toRadians(spec[2]), spec[4])}, dynamic);
+    }
+
+    private static int[] family(int seed, double maxChroma) {
+        double[] lab = lab(seed);
+        return hueFamily(Math.atan2(lab[2], lab[1]), Math.min(maxChroma, Math.hypot(lab[1], lab[2])));
+    }
+
+    /** A family of one Lab hue in radians, as colourful as the chroma or as sRGB allows at each tone, whichever is less. */
+    private static int[] hueFamily(double hue, double chroma) {
+        double cos = Math.cos(hue);
+        double sin = Math.sin(hue);
+        int[] family = new int[TONES.length];
+        for (int i = 0; i < TONES.length; i++) {
+            double l = TONES[i];
+            double c = chroma;
+            if (!inGamut(l, c * cos, c * sin)) {
+                // The most colour that fits at this tone; zero always does.
+                double low = 0, high = chroma;
+                for (int step = 0; step < 24; step++) {
+                    double mid = (low + high) / 2;
+                    if (inGamut(l, mid * cos, mid * sin)) low = mid;
+                    else high = mid;
+                }
+                c = low;
+            }
+            family[i] = fromLab(l, c * cos, c * sin);
+        }
+        return family;
+    }
+
     public int tone(int family, int tone) {
         for (int i = 0; i < TONES.length; i++)
             if (TONES[i] == tone) return tones[family][i];
@@ -158,7 +249,8 @@ public final class TonePalette {
         return y <= 216.0 / 24389.0 ? y * 24389.0 / 27.0 : 116.0 * Math.cbrt(y) - 16.0;
     }
 
-    private static double[] lab(int color) {
+    /** CIE L*a*b* of an sRGB colour, D65. */
+    static double[] lab(int color) {
         double r = LINEAR[(color >> 16) & 0xFF];
         double g = LINEAR[(color >> 8) & 0xFF];
         double b = LINEAR[color & 0xFF];
@@ -181,14 +273,29 @@ public final class TonePalette {
     }
 
     private static int fromLab(double l, double a, double b) {
+        double[] rgb = linearRgb(l, a, b);
+        return 0xFF000000 | (channel(rgb[0]) << 16) | (channel(rgb[1]) << 8) | channel(rgb[2]);
+    }
+
+    /**
+     * Whether the Lab colour is an sRGB colour, give or take floating point noise. Any looser and a
+     * channel allowed below zero lifts another one a whole 8-bit step, so tone 0 stops being black.
+     */
+    private static boolean inGamut(double l, double a, double b) {
+        for (double c : linearRgb(l, a, b))
+            if (c < -1e-6 || c > 1 + 1e-6) return false;
+        return true;
+    }
+
+    private static double[] linearRgb(double l, double a, double b) {
         double fy = (l + 16) / 116;
         double x = labInverse(fy + a / 500) * XN;
         double y = labInverse(fy);
         double z = labInverse(fy - b / 200) * ZN;
-        double r = 3.2406 * x - 1.5372 * y - 0.4986 * z;
-        double g = -0.9689 * x + 1.8758 * y + 0.0415 * z;
-        double bl = 0.0557 * x - 0.2040 * y + 1.0570 * z;
-        return 0xFF000000 | (channel(r) << 16) | (channel(g) << 8) | channel(bl);
+        return new double[]{
+                3.2406 * x - 1.5372 * y - 0.4986 * z,
+                -0.9689 * x + 1.8758 * y + 0.0415 * z,
+                0.0557 * x - 0.2040 * y + 1.0570 * z};
     }
 
     private static int channel(double linear) {

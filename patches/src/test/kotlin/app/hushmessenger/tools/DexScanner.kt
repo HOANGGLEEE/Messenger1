@@ -18,6 +18,11 @@ object DexScanner {
         .firstOrNull { it.name == "__redex_internal_original_name" }
         ?.initialValue?.let { (it as? StringEncodedValue)?.value }
 
+    // Redex renames most classes to LX/...; the original name it keeps usually has no package.
+    private fun ClassDef.originalSimpleName(): String? = redexName()?.removeSuffix(";")?.substringAfterLast('.')?.substringAfterLast('/')
+
+    private fun simpleName(type: String) = type.removeSuffix(";").substringAfterLast('/')
+
     private fun loadClasses(apkPath: String): List<ClassDef> {
         val container = DexFileFactory.loadDexContainer(File(apkPath), Opcodes.forApi(35))
         return container.dexEntryNames.flatMap { name ->
@@ -72,12 +77,11 @@ object DexScanner {
         println("  Total Window flag methods: $total")
 
         println("\n--- ScreenshotContentObserver and related classes ---\n")
-        val screenshotClasses = listOf(
-            "Lcom/facebook/screenshot/ScreenshotContentObserver;",
-            "Lcom/facebook/screenshot/",
-        )
+        val observers = mutableListOf<String>()
         for (cls in classes) {
-            if (screenshotClasses.any { cls.type.startsWith(it.removeSuffix(";")) }) {
+            val original = cls.originalSimpleName()
+            if (cls.type.startsWith("Lcom/facebook/screenshot/") || original?.contains("Screenshot") == true) {
+                if (cls.type.contains("ScreenshotContentObserver") || original?.startsWith("ScreenshotContentObserver") == true) observers += cls.type
                 println("  CLASS: ${cls.type}")
                 println("    Redex: ${cls.redexName() ?: "(none)"}")
                 for (m in cls.methods) {
@@ -90,7 +94,7 @@ object DexScanner {
             for (method in cls.methods) {
                 val code = method.implementation?.instructions?.toList() ?: continue
                 val refs = code.mapNotNull { (it as? ReferenceInstruction)?.reference?.toString() }
-                if (refs.any { it.contains("ScreenshotContentObserver") }) {
+                if (refs.any { ref -> ref.contains("ScreenshotContentObserver") || observers.any(ref::contains) }) {
                     println("  REFERENCES ScreenshotContentObserver: ${method.id()}")
                     println("    Redex: ${cls.redexName() ?: "(none)"}")
                     val strs = code.mapNotNull { ((it as? ReferenceInstruction)?.reference as? StringReference)?.string }
@@ -159,9 +163,10 @@ object DexScanner {
             "Lcom/facebook/core/mca/MailboxCoreJNI;",
             "Lcom/facebook/msys/mca/Mailbox;",
         )
+        val jniNames = jniClasses.map(::simpleName)
         for (cls in classes) {
-            if (cls.type in jniClasses) {
-                println("  CLASS: ${cls.type}")
+            if (cls.type in jniClasses || cls.originalSimpleName() in jniNames) {
+                println("  CLASS: ${cls.type}  redex=${cls.redexName() ?: "(none)"}")
                 for (m in cls.methods) {
                     if (m.name.startsWith("dispatch")) println("    ${m.id()}")
                 }
@@ -242,58 +247,6 @@ object DexScanner {
         }
     }
 
-    private fun scanIncomingMessages(classes: List<ClassDef>) {
-        println("\n=== INCOMING MESSAGE / PERSISTENCE CANDIDATES ===\n")
-        val identity = listOf("message_id", "messageId", "offline_threading_id")
-        val content = listOf("text=", "message_text", "messageText", "message_body")
-        val context = listOf("thread_key", "threadKey", "thread_id", "threadId", "sender_id", "senderId", "actor_id")
-        val persistence = listOf("insert", "upsert", "persist", "store", "receive", "incoming", "message_sync")
-
-        var shown = 0
-        for (cls in classes) {
-            for (method in cls.methods) {
-                val code = method.implementation?.instructions?.toList() ?: continue
-                val strings = code.mapNotNull { ((it as? ReferenceInstruction)?.reference as? StringReference)?.string }
-                val refs = code.mapNotNull { (it as? ReferenceInstruction)?.reference?.toString() }
-                fun has(patterns: List<String>) =
-                    strings.any { value -> patterns.any { value.contains(it, ignoreCase = true) } } ||
-                    refs.any { value -> patterns.any { value.contains(it, ignoreCase = true) } }
-
-                var score = 0
-                if (has(identity)) score += 3
-                if (has(content)) score += 3
-                if (has(context)) score += 2
-                if (has(persistence)) score += 2
-                val redex = cls.redexName().orEmpty()
-                if (redex.contains("Message", ignoreCase = true)) score++
-                if (listOf("Insert", "Store", "Persist", "Receive", "Incoming", "Sync")
-                        .any { redex.contains(it, ignoreCase = true) }) score++
-
-                if (score < 6 || (!has(identity) && !has(content))) continue
-                shown++
-                println("  SCORE $score: ${method.id()}")
-                println("    Class: ${cls.type}")
-                println("    Redex: ${cls.redexName() ?: "(none)"}")
-                println("    Params: ${method.parameterTypes}")
-                val matchedStrings = strings.filter { value ->
-                    (identity + content + context + persistence).any { value.contains(it, ignoreCase = true) }
-                }.distinct().take(16)
-                if (matchedStrings.isNotEmpty()) println("    Strings: $matchedStrings")
-                val matchedRefs = refs.filter { value ->
-                    (identity + content + context + persistence).any { value.contains(it, ignoreCase = true) }
-                }.distinct().take(20)
-                if (matchedRefs.isNotEmpty()) println("    Refs: $matchedRefs")
-                println()
-                if (shown >= 120) {
-                    println("  Stopped after 120 candidates.")
-                    return
-                }
-            }
-        }
-        println("  Incoming/persistence candidates shown: $shown")
-        println("  Do not hook a candidate until its parameters/fields prove plaintext exists before UI read/seen.")
-    }
-
     private fun scanVanishMode(classes: List<ClassDef>) {
         println("\n=== VANISH MODE / DISAPPEARING MESSAGES ===\n")
         val patterns = listOf(
@@ -341,6 +294,8 @@ object DexScanner {
         require(args.isNotEmpty()) { "Usage: DexScanner <apk-path> [feature]" }
         val apkPath = args[0]
         val feature = args.getOrNull(1) ?: "all"
+        val features = listOf("flag_secure", "read_receipt", "anti_unsend", "vanish", "all")
+        require(feature in features) { "Unknown feature: $feature (use ${features.joinToString()})" }
         require(File(apkPath).isFile) { "APK not found: $apkPath" }
 
         println("Loading DEX from: $apkPath")
@@ -351,16 +306,13 @@ object DexScanner {
             "flag_secure" -> scanFlagSecure(classes)
             "read_receipt" -> scanReadReceipts(classes)
             "anti_unsend" -> scanAntiUnsend(classes)
-            "incoming_message" -> scanIncomingMessages(classes)
             "vanish" -> scanVanishMode(classes)
             "all" -> {
                 scanFlagSecure(classes)
                 scanReadReceipts(classes)
                 scanAntiUnsend(classes)
-                scanIncomingMessages(classes)
                 scanVanishMode(classes)
             }
-            else -> println("Unknown feature: $feature (use flag_secure, read_receipt, anti_unsend, incoming_message, vanish, or all)")
         }
     }
 }

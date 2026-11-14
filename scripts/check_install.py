@@ -26,11 +26,20 @@ def recorded_builds(directory: Path = PROFILES) -> dict[int, tuple[str, str]]:
             key, _, value = line.partition(" ")
             if key in ("version", "code", "sha256"):
                 fields[key] = value
-        builds[int(fields["code"])] = (fields["version"], fields["sha256"])
+        try:
+            builds[int(fields["code"])] = (fields["version"], fields["sha256"])
+        except (KeyError, ValueError) as error:
+            raise ValueError(f"{path.name} is missing a version, code or sha256 line") from error
     return builds
 
 
-BUILDS = recorded_builds()
+try:
+    BUILDS = recorded_builds()
+    PROFILE_ERROR = None
+except (OSError, ValueError) as error:
+    # A broken record has to read as CHECK FAILED (exit 2) from main, never as a traceback with exit 1.
+    BUILDS = {}
+    PROFILE_ERROR = f"The recorded builds can't be read: {error}"
 STOCK_SHA256 = {code: sha256 for code, (_, sha256) in BUILDS.items()}
 
 
@@ -51,6 +60,14 @@ SPOOFED_HELP = (
     " That's the highest version code Android allows, which usually means a Messenger build from "
     'another patch set with "Spoof package version" on. See "INSTALL_FAILED_VERSION_DOWNGRADE" '
     """under "If something doesn't work" in the README for data-preserving options."""
+)
+# Android keeps a copy uninstalled with its data kept (or archived) as the bar for the next install: a lower
+# version code fails with INSTALL_FAILED_VERSION_DOWNGRADE, and another signing key fails with
+# INSTALL_FAILED_UPDATE_INCOMPATIBLE even at a higher code. A Meta-signed leftover never takes a patched copy.
+LEFTOVER_HELP = (
+    " Android refuses anything lower, and only that copy's signing key can go over it, even at a higher "
+    "version code. Select Clone install under another package name to install next to it, or uninstall "
+    "that copy in Settings > Apps if you don't need the data it kept."
 )
 
 
@@ -92,22 +109,37 @@ def active_signers(output: str, sdk: int) -> frozenset[str]:
         if len(counts) == 1
         else None
     )
+    # Build Tools 36 prints "Signer #1 ..."; 37 prefixes the scheme, as in "V3.1 Signer: (minSdkVersion=...) ...".
     records = re.findall(
-        r"^Signer .*certificate SHA-256 digest:.*$", output, re.MULTILINE
+        r"^(?:V\S* )?Signer\b.*certificate SHA-256 digest:.*$", output, re.MULTILINE
     )
     selected = []
     identities = set()
     numbers = set()
+    styles = set()
     for record in records:
-        match = re.fullmatch(
+        legacy = re.fullmatch(
             r"Signer (?:#(\d+)|\(minSdkVersion=(\d+), maxSdkVersion=(\d+)\)) "
             r"certificate SHA-256 digest: ([0-9a-fA-F]{64})",
             record,
         )
-        if not match:
+        prefixed = legacy or re.fullmatch(
+            r"V(\d+(?:\.\d+)?) Signer: (?:\(minSdkVersion=(\d+), maxSdkVersion=(\d+)\) )?"
+            r"certificate SHA-256 digest: ([0-9a-fA-F]{64})",
+            record,
+        )
+        if not prefixed:
             raise ValueError("Unrecognized apksigner certificate output")
-        number, lower, upper, digest = match.groups()
-        identity = (number, lower, upper)
+        if legacy:
+            scheme = None
+            number, lower, upper, digest = legacy.groups()
+        else:
+            number = None
+            scheme, lower, upper, digest = prefixed.groups()
+        styles.add(scheme is None)
+        identity = (scheme, number, lower, upper)
+        if len(styles) > 1:
+            raise ValueError("Ambiguous apksigner certificate output")
         if identity in identities or (lower is not None and int(lower) > int(upper)):
             raise ValueError("Ambiguous apksigner certificate output")
         identities.add(identity)
@@ -265,14 +297,20 @@ def conflicts(
     installed: dict[str, Apk],
     owners: dict[str, str],
     leftover: int | None = None,
+    user: int | None = None,
 ) -> list[str]:
     problems = []
     previous = installed.get(candidate.package)
     if previous:
         if previous.signers != candidate.signers:
+            # Android answers this one with INSTALL_FAILED_UPDATE_INCOMPATIBLE ("signatures do not match").
+            where = "" if user in (None, 0) else f" for Android user {user} (Secure Folder, a work profile or a second user)"
             problems.append(
-                f"{candidate.package}: current signing certificates differ from the installed app. "
-                "Keep its data intact. This check does not approve certificate rotation or replacement."
+                f"Same-package signer mismatch: {candidate.package} is already installed{where} with "
+                "different current signing certificates, so Android refuses this APK as an update "
+                "(INSTALL_FAILED_UPDATE_INCOMPATIBLE). Patch with the key that copy was signed with, or select "
+                "Clone install under another package name to keep both. Keep its data intact. "
+                "This check does not approve certificate rotation or replacement."
             )
         if previous.version_code > candidate.version_code:
             problems.append(
@@ -290,7 +328,7 @@ def conflicts(
             + (
                 SPOOFED_HELP
                 if leftover == SPOOFED_VERSION_CODE
-                else " Android refuses anything lower. Preserve the retained data and signing key. An in-place update needs an equal or higher version code."
+                else LEFTOVER_HELP
             )
         )
     for permission in sorted(candidate.permissions):
@@ -299,9 +337,12 @@ def conflicts(
             if owner not in installed:
                 raise ValueError(f"Cannot verify permission owner {owner}")
             if installed[owner].signers != candidate.signers:
+                # A different app holds the permission, so this is INSTALL_FAILED_DUPLICATE_PERMISSION,
+                # not a Messenger signer problem. Removing Messenger wouldn't help.
                 problems.append(
-                    f"{permission}: owned by {owner} with different current signing certificates. "
-                    "Use the same signing key for apps sharing this permission."
+                    f"Permission owner mismatch: {permission} is owned by {owner} with different current "
+                    "signing certificates, so Android refuses the install (INSTALL_FAILED_DUPLICATE_PERMISSION). "
+                    f"Patch with the same signing key as {owner}. The installed Messenger isn't the cause."
                 )
     return problems
 
@@ -547,8 +588,9 @@ def check(args: argparse.Namespace) -> int:
         if leftover is not None:
             print(
                 f"NOTE: {candidate.package} was uninstalled with its data kept (version code {leftover}). "
-                "This check can't read that copy's signing key, and Android may refuse a different key "
-                "on install. Preserve the retained data and signing key while resolving that conflict."
+                "This check can't read that copy's signing key, and Android refuses a different key on "
+                "install even at a higher version code. Clone install under another package name leaves "
+                "that copy and its data alone."
             )
     required = {owners[name] for name in candidate.permissions if name in owners}
     required.update(packages.keys() & {candidate.package, "com.facebook.katana"})
@@ -581,7 +623,9 @@ def check(args: argparse.Namespace) -> int:
             print(
                 f"Installed {package} certificate SHA-256: {', '.join(sorted(info.signers))}"
             )
-    problems = conflicts(candidate, installed, owners, leftover)
+    problems = conflicts(
+        candidate, installed, owners, leftover, packages.get(candidate.package)
+    )
     if problems:
         for problem in problems:
             print(f"CONFLICT: {problem}")
@@ -605,12 +649,14 @@ def main() -> int:
         "--build-tools",
         type=Path,
         required=True,
-        help="Android SDK Build Tools directory (tested with 36.1.0)",
+        help="Android SDK Build Tools directory (tested with 36.1.0 and 37.0.0)",
     )
     parser.add_argument("--java", type=Path, default=Path("java"))
     parser.add_argument("--adb", type=Path, default=Path("adb"))
     args = parser.parse_args()
     try:
+        if PROFILE_ERROR:
+            raise ValueError(PROFILE_ERROR)
         return check(args)
     except subprocess.TimeoutExpired:
         print(

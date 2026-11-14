@@ -22,7 +22,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Pauses all controls after three consecutive crashes within a minute of startup.
- * Runs once per process in {@link SettingsProvider#onCreate()}, before any hook.
+ * Runs once per process from {@link HostScreens#start}: in {@link SettingsProvider#onCreate()} on a normal install,
+ * and inside the first hook, settings screen or restart on Root Mount. From Android 11 it counts native crashes and
+ * ANR kills through the exit history too; older Android sees only Java crashes, which our handler marks.
  */
 final class CrashGuard {
     static final String START_RECORD = "hushmessenger-start";
@@ -41,10 +43,10 @@ final class CrashGuard {
     static StagedInput stagedInput = FileInputStream::new;
 
     static void onProcessStart(Context context) {
-        if (context == null || !STARTED.compareAndSet(false, true)) return;
-        startElapsed = SystemClock.elapsedRealtime();
+        // Preferences first, so a call made before they load doesn't use up the one start.
         SharedPreferences prefs = Settings.preferences;
-        if (prefs == null) return;
+        if (context == null || prefs == null || !STARTED.compareAndSet(false, true)) return;
+        startElapsed = SystemClock.elapsedRealtime();
         try {
             safeModeActive = prefs.getBoolean("safe_mode", false);
             filesDir = context.getFilesDir();
@@ -86,6 +88,7 @@ final class CrashGuard {
         // Preference listeners ran while the runtime guard was still active. Republish after recovery
         // commits, outside the record lock so startup and theme initialization can't invert their locks.
         if (HostScreens.started && !HostScreens.failed && Settings.installed.contains("material_you")) MaterialYouTheme.bind();
+        if (HostScreens.started && !HostScreens.failed && Settings.installed.contains(TextStyleActivity.KEY)) TextStyleActivity.refresh();
         return true;
     }
 
@@ -209,6 +212,7 @@ final class CrashGuard {
         private final Thread.UncaughtExceptionHandler delegate;
         CrashMark(Thread.UncaughtExceptionHandler delegate) { this.delegate = delegate; }
         @Override public void uncaughtException(Thread thread, Throwable throwable) {
+            try { LastCrash.record(filesDir, throwable, System.currentTimeMillis()); } catch (Throwable ignored) { }
             try { markCrash(); } catch (Throwable ignored) { }
             if (delegate != null) delegate.uncaughtException(thread, throwable);
         }

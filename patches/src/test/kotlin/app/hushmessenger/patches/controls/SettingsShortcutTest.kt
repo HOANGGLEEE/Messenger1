@@ -1,6 +1,7 @@
 package app.hushmessenger.patches.controls
 
 import app.morphe.patcher.patch.PatchException
+import java.io.File
 import java.io.StringReader
 import java.io.StringWriter
 import javax.xml.parsers.DocumentBuilderFactory
@@ -33,107 +34,55 @@ class SettingsShortcutTest {
         (0 until nodes.length).map { nodes.item(it) as Element }
     }
 
-    @Test fun controlsOpenDirectlyAndKeepShareTargetsAndAlternateIcons() {
+    /** HushFacebook#146: the extension publishes Patch controls and Restart Messenger, so its switch can hide them. */
+    @Test fun settingsGoInAndTheLauncherIconsStayStock() {
         val manifest = manifest()
-        val shortcuts = shortcuts("""<shortcut android:shortcutId="stock_action"/>$share""")
-        val originalShare = shortcuts.nodes("share-target").single().cloneNode(true)
-        manifest.addSettingsAccess(shortcuts)
-        val entry = shortcuts.nodes("shortcut").first()
-        assertEquals("hushmessenger_controls", entry.getAttribute("android:shortcutId"))
-        assertEquals("@string/hushmessenger_patch_controls", entry.getAttribute("android:shortcutShortLabel"))
-        val intent = shortcuts.nodes("intent").first()
-        assertEquals("android.intent.action.VIEW", intent.getAttribute("android:action"))
-        assertEquals("com.facebook.orca", intent.getAttribute("android:targetPackage"))
-        // Both shortcuts start the see-through stock host, which opens the right screen for the install.
-        assertEquals(SHORTCUT_HOST, intent.getAttribute("android:targetClass"))
-        assertEquals(listOf(SCREEN_EXTRA to "settings", SCREEN_EXTRA to "restart"), shortcuts.nodes("extra").map {
-            it.getAttribute("android:name") to it.getAttribute("android:value")
-        })
-        assertTrue(originalShare.isEqualNode(shortcuts.nodes("share-target").single()))
-        val restart = shortcuts.nodes("shortcut")[1]
-        assertEquals("hushmessenger_restart", restart.getAttribute("android:shortcutId"))
-        assertEquals("@string/hushmessenger_restart", restart.getAttribute("android:shortcutShortLabel"))
-        assertEquals(SHORTCUT_HOST, shortcuts.nodes("intent")[1].getAttribute("android:targetClass"))
+        val launchers = manifest.nodes("activity-alias").map { it.cloneNode(true) }
+        manifest.addSettingsAccess()
         val restartActivity = manifest.nodes("activity").single { it.getAttribute("android:name").endsWith(".RestartActivity") }
         // Shortcuts launch as Messenger itself; another app must not be able to kill and relaunch it.
         assertEquals("false", restartActivity.getAttribute("android:exported"))
         assertTrue(restartActivity.getAttribute("android:permission").isEmpty())
         assertEquals("true", restartActivity.getAttribute("android:noHistory"))
         assertEquals(0, restartActivity.getElementsByTagName("intent-filter").length)
-        assertEquals("stock_action", shortcuts.nodes("shortcut")[2].getAttribute("android:shortcutId"))
-        assertEquals(2, manifest.nodes("meta-data").count { it.getAttribute("android:resource") == "@xml/stock_shortcuts" })
-        assertEquals("false", manifest.nodes("activity-alias")[1].getAttribute("android:enabled"))
-        assertEquals("stock.permission", manifest.nodes("activity")[0].getAttribute("android:permission"))
-        assertEquals(listOf("Patch controls", "Restart Messenger"), shortcutLabels.values.toList())
-    }
-
-    @Test fun separateIntentFiltersDoNotMakeAnEntryALauncher() {
-        val split = """<activity android:name="stock.NonLauncher"><intent-filter><action android:name="android.intent.action.MAIN"/></intent-filter><intent-filter><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>"""
-        val manifest = manifest(primary + split)
-        manifest.addSettingsAccess(shortcuts())
+        // Messenger's icons keep their own shortcuts file: no copy for the alternate icon, nothing added to the first.
+        for ((index, launcher) in launchers.withIndex()) assertTrue(launcher.isEqualNode(manifest.nodes("activity-alias")[index]))
         assertEquals(1, manifest.nodes("meta-data").count { it.getAttribute("android:name") == "android.app.shortcuts" })
+        assertEquals("stock.permission", manifest.nodes("activity")[0].getAttribute("android:permission"))
+        assertEquals("app.hushmessenger.extension.SettingsLauncher", manifest.nodes("activity-alias").last().getAttribute("android:name"))
     }
 
-    private fun assertRejected(manifest: Document, shortcuts: Document) {
-        val original = manifest.snapshot() to shortcuts.snapshot()
-        assertFailsWith<PatchException> { manifest.addSettingsAccess(shortcuts) }
-        assertEquals(original, manifest.snapshot() to shortcuts.snapshot())
-    }
-
-    @Test fun missingPrimaryOrChangedShortcutReferenceFailsBeforeMutation() {
-        assertRejected(manifest(alternate), shortcuts())
-        assertRejected(manifest(primary.replace(metadata, "")), shortcuts())
-        assertRejected(manifest(primary.replace("@xml/stock_shortcuts", "invalid")), shortcuts())
-        assertRejected(manifest(primary.replace(metadata, metadata + metadata)), shortcuts())
-        assertRejected(manifest(primary + alternate.replace(filter, filter + metadata.replace("stock_shortcuts", "other"))), shortcuts())
+    private fun assertRejected(manifest: Document) {
+        val original = manifest.snapshot()
+        assertFailsWith<PatchException> { manifest.addSettingsAccess() }
+        assertEquals(original, manifest.snapshot())
     }
 
     @Test fun aMissingOrChangedScreenHostFailsBeforeMutation() {
-        assertRejected(manifest(application = ""), shortcuts())
-        assertRejected(manifest(application = factory.replace("M4aAppComponentFactory", "Other")), shortcuts())
-        assertRejected(manifest(hosts = shortcutHost), shortcuts())
-        assertRejected(manifest(hosts = screenHost), shortcuts())
-        assertRejected(manifest(hosts = screenHost + shortcutHost + screenHost), shortcuts())
+        assertRejected(manifest(application = ""))
+        assertRejected(manifest(application = factory.replace("M4aAppComponentFactory", "Other")))
+        assertRejected(manifest(hosts = shortcutHost))
+        assertRejected(manifest(hosts = screenHost))
+        assertRejected(manifest(hosts = screenHost + shortcutHost + screenHost))
         for (change in listOf(
             """android:theme="@style/Other"""", """android:taskAffinity="app.other"""", """android:launchMode="singleTop"""",
             """android:process=":other"""", """android:enabled="false"""", """android:excludeFromRecents="true"""",
-        )) assertRejected(manifest(hosts = screenHost.replace("android:exported", "$change android:exported") + shortcutHost), shortcuts())
-        assertRejected(manifest(hosts = screenHost.replace("<meta-data", "$filter<meta-data") + shortcutHost), shortcuts())
-        assertRejected(manifest(hosts = screenHost.replace("\"false\"", "\"true\"") + shortcutHost), shortcuts())
-        assertRejected(manifest(hosts = screenHost.replace("activity", "activity-alias") + shortcutHost), shortcuts())
+        )) assertRejected(manifest(hosts = screenHost.replace("android:exported", "$change android:exported") + shortcutHost))
+        assertRejected(manifest(hosts = screenHost.replace("<meta-data", "$filter<meta-data") + shortcutHost))
+        assertRejected(manifest(hosts = screenHost.replace("\"false\"", "\"true\"") + shortcutHost))
+        assertRejected(manifest(hosts = screenHost.replace("activity", "activity-alias") + shortcutHost))
         // The shortcut host must stay affinity-free, see-through and standard, or a shortcut would clear Messenger's task.
         for ((from, to) in listOf(
             """android:taskAffinity=""""" to "", """android:taskAffinity=""""" to """android:taskAffinity="com.facebook.orca"""",
             "Theme.Translucent.NoTitleBar" to "Theme.Material", """android:exported="false"""" to """android:exported="false" android:launchMode="singleTop"""",
             "/>" to ">$filter</activity>",
-        )) assertRejected(manifest(hosts = screenHost + shortcutHost.replace(from, to)), shortcuts())
+        )) assertRejected(manifest(hosts = screenHost + shortcutHost.replace(from, to)))
     }
 
-    @Test fun changedXmlOrMissingShareTargetFailsBeforeMutation() {
-        assertRejected(manifest(), shortcuts(""))
-        assertRejected(manifest(), shortcuts(share.replace("ShareIntentHandler", "OtherHandler")))
-        assertRejected(manifest(), shortcuts(share + share))
-        assertRejected(manifest(), xml("<resources/>"))
-    }
-
-    @Test fun duplicateSettingsOrShortcutFailsBeforeMutation() {
+    @Test fun duplicateSettingsFailBeforeMutation() {
         val existing = manifest()
         existing.addSettingsEntry()
-        assertRejected(existing, shortcuts())
-        assertRejected(manifest(), shortcuts("""<shortcut android:shortcutId="hushmessenger_controls"/>$share"""))
-        assertRejected(manifest(), shortcuts("""<shortcut android:shortcutId="hushmessenger_restart"/>$share"""))
-    }
-
-    @Test fun labelsKeepExistingStringsAndRejectDuplicatesBeforeMutation() {
-        val strings = xml("""<resources><string name="stock">Keep &amp; preserve</string></resources>""")
-        val original = strings.nodes("string").single().cloneNode(true)
-        strings.addShortcutLabels()
-        assertTrue(original.isEqualNode(strings.nodes("string").first()))
-        assertEquals(3, strings.nodes("string").size)
-        val snapshot = strings.snapshot()
-        assertFailsWith<PatchException> { strings.addShortcutLabels() }
-        assertEquals(snapshot, strings.snapshot())
-        assertFailsWith<PatchException> { xml("<wrong/>").addShortcutLabels() }
+        assertRejected(existing)
     }
 
     @Test fun resolveFindsTheShortcutsXmlUnderAnyShrunkName() {
@@ -146,6 +95,16 @@ class SettingsShortcutTest {
         assertEquals("res/los.xml", resolveShortcutsPath(listOf("res/los.xml")) { shortcuts() })
     }
 
+    /** decode() takes decoded directories: a shrunk archive name like res/eve.xml matched nothing and left one APK load per read. */
+    @Test fun shortcutsAreLookedUpAmongTheDecodedXmlDirectories() {
+        assertEquals("res/xml*", SHORTCUTS_DIRECTORIES)
+        val docs = mapOf("res/xml/eve.xml" to shortcuts(), "res/xml-v25/abc.xml" to xml("<resources/>"))
+        val reads = mutableListOf<String>()
+        val path = resolveShortcutsPath(listOf("res/xml/eve.xml", "res/xml-v25/abc.xml", "res/xml/raw.bin")) { reads += it; docs.getValue(it) }
+        assertEquals("res/xml/eve.xml", path)
+        assertEquals(listOf("res/xml/eve.xml", "res/xml-v25/abc.xml"), reads)
+    }
+
     @Test fun resolveRejectsZeroOrMultipleShortcutsFiles() {
         assertFailsWith<PatchException> {
             resolveShortcutsPath(listOf("res/values/strings.xml")) { xml("<resources/>") }
@@ -156,6 +115,76 @@ class SettingsShortcutTest {
         assertFailsWith<PatchException> {
             resolveShortcutsPath(listOf("res/a.xml", "res/b.xml")) { shortcuts() }
         }
+    }
+
+    private fun Document.strings() = nodes("string").associate { it.getAttribute("name") to it.textContent }
+
+    /** #141: labels are string resources, added beside Messenger's own strings. */
+    @Test fun labelStringsGoInBesideMessengersOwn() {
+        val file = xml("""<resources><string name="app_name">Messenger</string></resources>""")
+        file.addStrings(MANIFEST_STRINGS.getValue(DEFAULT_STRINGS))
+        assertEquals(mapOf("app_name" to "Messenger", SETTINGS_LABEL to "HushMessenger settings", RESTART_LABEL to "Restart Messenger",
+            BOLD_LABEL to "Bold", ITALIC_LABEL to "Italic"), file.strings())
+        // A second run means the APK was patched before, and nothing more goes in.
+        val before = file.snapshot()
+        assertFailsWith<PatchException> { file.addStrings(mapOf("hush_new" to "x", SETTINGS_LABEL to "y")) }
+        assertEquals(before, file.snapshot())
+        assertFailsWith<PatchException> { xml("<other/>").addStrings(mapOf("hush_new" to "x")) }
+        assertTrue(file.setString(SETTINGS_LABEL, "Copy settings"))
+        assertEquals("Copy settings", file.strings()[SETTINGS_LABEL])
+        assertFalse(file.setString("hush_missing", "x"))
+    }
+
+    /** The launcher and the text menu show what the settings page calls the same things, in its languages. */
+    @Test fun labelsMatchTheSettingsPagesOwnWords() {
+        val source = File("../extensions/messenger/src/main/java/app/hushmessenger/extension")
+        val keys = mapOf(SETTINGS_LABEL to "settings", RESTART_LABEL to "restart", BOLD_LABEL to "text_style_bold", ITALIC_LABEL to "text_style_italic")
+        val english = source.resolve("SettingsText.java").readText()
+        val tables = mapOf("res/values-vi/strings.xml" to "SettingsTextViVN.java", "res/values-zh-rTW/strings.xml" to "SettingsTextZhTw.java")
+        assertEquals(setOf(DEFAULT_STRINGS) + tables.keys, MANIFEST_STRINGS.keys)
+        for ((path, texts) in MANIFEST_STRINGS) {
+            assertEquals(keys.keys, texts.keys, path)
+            // A clone puts its own name in place of this one.
+            assertTrue(SETTINGS_LABEL_NAME in texts.getValue(SETTINGS_LABEL), path)
+            val table = tables[path]?.let { source.resolve(it).readText() }
+            for ((string, key) in keys) {
+                val text = texts.getValue(string)
+                if (table == null) assertTrue("ENGLISH.put(\"$key\", \"$text\");" in english, "$path $string")
+                else assertTrue("{\"$key\", \"$text\"}" in table, "$path $string")
+            }
+        }
+    }
+
+    /** The settings icon is an adaptive icon of the APK's own, a white gear on HushMessenger's blue (#141). */
+    @Test fun theSettingsIconIsAnAdaptiveGear() {
+        assertEquals("res/drawable/$SETTINGS_ICON.xml", SETTINGS_ICON_PATH)
+        val icon = xml(SETTINGS_ICON_XML)
+        assertEquals("adaptive-icon", icon.documentElement.tagName)
+        assertEquals(listOf("background", "foreground"), icon.documentElement.childNodes.let { n ->
+            (0 until n.length).mapNotNull { (n.item(it) as? Element)?.tagName } })
+        val path = icon.nodes("path").single()
+        assertEquals(GEAR_PATH, path.getAttribute("android:pathData"))
+        // Every command has whole sets of numbers, and every point the absolute ones reach sits in the 24 unit box.
+        val arity = mapOf('M' to 2, 'L' to 2, 'H' to 1, 'V' to 1, 'C' to 6, 'S' to 4, 'Q' to 4, 'T' to 2, 'A' to 7, 'Z' to 0)
+        val tokens = Regex("[A-Za-z]|-?\\d*\\.?\\d+").findAll(GEAR_PATH).map { it.value }.toList()
+        assertEquals(GEAR_PATH.replace(Regex("[ ,]"), "").length, tokens.sumOf { it.length }, "Nothing but commands and numbers")
+        var command = ' '
+        var numbers = mutableListOf<Double>()
+        fun close() {
+            if (command == ' ') return
+            val size = arity.getValue(command.uppercaseChar())
+            assertTrue(if (size == 0) numbers.isEmpty() else numbers.isNotEmpty() && numbers.size % size == 0, "$command $numbers")
+            if (command.isUpperCase()) assertTrue(numbers.all { it in 0.0..24.0 }, "$command $numbers")
+        }
+        for (token in tokens) {
+            if (token.length == 1 && token[0].isLetter()) {
+                close()
+                command = token.single()
+                numbers = mutableListOf()
+            } else numbers += token.toDouble()
+        }
+        close()
+        assertEquals('z', command)
     }
 
     @Test fun resolveSkipsUnreadableEntriesAndValuesDirectory() {

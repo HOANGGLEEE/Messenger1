@@ -1,12 +1,15 @@
 package app.hushmessenger.patches.controls
 
 import app.morphe.patcher.PatcherConfig
+import app.morphe.patcher.PatcherProgress
 import app.morphe.patcher.patch.BytecodePatchContext
 import app.morphe.patcher.patch.ResourcePatch
 import app.morphe.patcher.patch.ResourcePatchContext
 import app.morphe.patcher.resource.ResourceMode
 import app.morphe.patcher.util.proxy.mutableTypes.MutableClass
+import com.android.tools.smali.dexlib2.AccessFlags
 import com.android.tools.smali.dexlib2.immutable.ImmutableClassDef
+import com.android.tools.smali.dexlib2.immutable.ImmutableField
 import com.android.tools.smali.dexlib2.Opcode
 import com.android.tools.smali.dexlib2.Opcodes
 import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile
@@ -24,8 +27,8 @@ import kotlin.test.*
 class MaterialYouPatchTest {
     private val scheme = "Lcom/facebook/mig/scheme/schemes/DarkColorScheme;"
 
-    private fun tokenMethod(name: String, token: String, call: String, callOwner: String = token) =
-        fixtureMethod("$scheme->$name($token)I", """
+    private fun tokenMethod(name: String, token: String, call: String, callOwner: String = token, owner: String = scheme) =
+        fixtureMethod("$owner->$name($token)I", """
             const/4 v0, 0x0
             invoke-static {p1, v0}, LX/33W;->A0j(Ljava/lang/Object;I)V
             invoke-interface {p1}, $callOwner->$call()I
@@ -67,9 +70,10 @@ class MaterialYouPatchTest {
     }
 
     @Test fun compatReportChecksWhatThePatchRewrites() {
-        // scripts/CompatReport.java checks every build for these; a value changed on one side only fails here.
-        val report = Path.of("../scripts/CompatReport.java").readText()
+        // The compat report (its tables in scripts/compat/CompatReport.java) checks every build for these; a value changed on one side only fails here.
+        val report = Path.of("../scripts/compat/CompatReport.java").readText()
         assertContains(report, "DARK_SCHEME = \"$DARK_SCHEME\";")
+        assertContains(report, "LIGHT_SCHEME = \"$LIGHT_SCHEME\";")
         assertContains(report, "FDS_COLORS = \"$FDS_COLORS\";")
         fun javaSet(name: String) = assertNotNull(Regex("""$name = Set\.of\((.*?)\);""", RegexOption.DOT_MATCHES_ALL).find(report), name).groupValues[1]
         assertEquals(materialYouSurfaces.keys, javaSet("DARK_SURFACES").split(",").map { it.trim().removePrefix("0x").toLong(16).toInt() }.toSet())
@@ -88,6 +92,7 @@ class MaterialYouPatchTest {
             unrelated.forEach { assertSame(it, context.classDefBy(it.type)) }
             assertSame(extension, context.classDefBy(extension.type))
             assertTrue(context.classDefBy(DARK_SCHEME) is MutableClass)
+            assertTrue(context.classDefBy(LIGHT_SCHEME) is MutableClass)
             assertTrue(context.classDefBy(FDS_COLORS) is MutableClass)
             assertTrue(context.classDefBy("LX/DarkCheck;") is MutableClass)
             assertTrue(context.classDefBy("LX/ThemeColors;") is MutableClass)
@@ -154,13 +159,13 @@ class MaterialYouPatchTest {
     }
 
     @Test fun branchesAndFallthroughReturnThroughTheThemeHelper(@TempDir temporary: Path) {
-        val routes = mapOf(DARK_SCHEME to "mig(I)I", FDS_COLORS to "fds(I)I", "LX/DarkCheck;" to "darkModeAnswer(Z)Z")
+        val routes = mapOf(DARK_SCHEME to "mig(I)I", LIGHT_SCHEME to "migLight(I)I", FDS_COLORS to "fds(I)I", "LX/DarkCheck;" to "darkModeAnswer(Z)Z")
         for (register in listOf(0, 16)) {
             val classes = themeClasses().map { cls ->
                 if (cls.type !in routes) cls else {
                     val method = cls.methods.single()
                     val prefix = when (cls.type) {
-                        DARK_SCHEME -> "move-object/from16 v1, p1\ninvoke-interface {v1}, LX/Token;->color()I\nmove-result v$register"
+                        DARK_SCHEME, LIGHT_SCHEME -> "move-object/from16 v1, p1\ninvoke-interface {v1}, LX/Token;->color()I\nmove-result v$register"
                         FDS_COLORS -> "move-object/from16 v1, p0\ninvoke-static {v1}, LX/DarkCheck;->dark(Landroid/content/Context;)Z\nmove-result v$register\nconst v$register, -0xf7f7f7"
                         else -> "const/16 v$register, 0x1"
                     }
@@ -180,7 +185,10 @@ class MaterialYouPatchTest {
             withThemeContext(temporary.resolve("register-$register"), classes) { context, _ ->
                 materialYouPatch.execute(context)
                 val dex = DexBackedDexFile(Opcodes.forApi(28), java.nio.ByteBuffer.wrap(lifecycleDex(classes.map { context.classDefBy(it.type) })))
-                for (cls in dex.classes.filter { it.type in routes }) {
+                val routed = dex.classes.filter { it.type in routes }
+                // Otherwise a dex without these classes would check nothing and pass.
+                assertEquals(routes.keys, routed.map { it.type }.toSet())
+                for (cls in routed) {
                     val code = cls.methods.single().implementation!!.instructions.toList()
                     val helper = code.indexOfFirst { (it as? ReferenceInstruction)?.reference.toString() ==
                         "Lapp/hushmessenger/extension/MaterialYouTheme;->${routes.getValue(cls.type)}" }
@@ -188,7 +196,9 @@ class MaterialYouPatchTest {
                     assertEquals(if (register < 16) Opcode.INVOKE_STATIC else Opcode.INVOKE_STATIC_RANGE, code[helper].opcode)
                     assertEquals(listOf(Opcode.MOVE_RESULT, Opcode.RETURN), code.drop(helper + 1).take(2).map { it.opcode })
                     assertEquals(listOf(register, register), code.drop(helper + 1).take(2).map { (it as OneRegisterInstruction).registerA })
-                    for (at in code.indices.filter { code[it].opcode == Opcode.IF_EQZ || code[it].opcode == Opcode.GOTO }) {
+                    val branches = code.indices.filter { code[it].opcode == Opcode.IF_EQZ || code[it].opcode == Opcode.GOTO }
+                    assertTrue(branches.isNotEmpty(), cls.type)
+                    for (at in branches) {
                         assertEquals(helper, code.branchTarget(at), cls.type)
                     }
                     val switch = code.indexOfFirst { it.opcode == Opcode.PACKED_SWITCH }
@@ -201,8 +211,100 @@ class MaterialYouPatchTest {
         }
     }
 
+    /** 583's A02 only hands its token to A01, which is already wrapped, so wrapping A02 would remap the color twice. */
+    @Test fun aReturnThatOnlyHandsBackAnotherColorsAnswerIsntRemappedTwice(@TempDir temporary: Path) {
+        val resolver = "$FDS_COLORS->A00(Landroid/content/Context;II)I"
+        val classes = themeClasses().map { cls ->
+            if (cls.type != FDS_COLORS) cls else ImmutableClassDef.of(fixtureClass(FDS_COLORS, cls.methods.toList() + listOf(
+                fixtureMethod("$FDS_COLORS->A02(Landroid/content/Context;I)I", """
+                    const/4 v0, 0x0
+                    invoke-static {p0, p1, v0}, $resolver
+                    move-result v1
+                    return v1
+                """.trimIndent(), registers = 4, flags = 9),
+                // Delegates on one path and returns its own color on the other, so only the own color is wrapped.
+                fixtureMethod("$FDS_COLORS->A03(Landroid/content/Context;I)I", """
+                    if-eqz p1, :own
+                    const/4 v0, 0x0
+                    invoke-static {p0, p1, v0}, $resolver
+                    move-result v1
+                    return v1
+                    :own
+                    const v1, -0xf7f7f7
+                    return v1
+                """.trimIndent(), registers = 4, flags = 9),
+            )))
+        }
+        withThemeContext(temporary, classes) { context, _ ->
+            materialYouPatch.execute(context)
+            fun wraps(name: String) = context.classDefBy(FDS_COLORS).methods.single { it.name == name }.implementation!!
+                .instructions.count { (it as? ReferenceInstruction)?.reference.toString() == "Lapp/hushmessenger/extension/MaterialYouTheme;->fds(I)I" }
+            assertEquals(listOf(1, 0, 1), listOf("A00", "A02", "A03").map(::wraps))
+        }
+    }
+
+    /** 584 dropped FDSColors' name (LX/9TH;), leaving a singleton whose (Context, ?, ?)I resolver asks the dark check. */
+    private fun unnamedFdsColors(type: String) = ImmutableClassDef.of(fixtureClass(type, listOf(
+        fixtureMethod("$type->A00(Landroid/content/Context;II)I", """
+            invoke-static {p0}, LX/DarkCheck;->dark(Landroid/content/Context;)Z
+            move-result v0
+            const v0, -0xf7f7f7
+            return v0
+        """.trimIndent(), flags = 9)),
+        extraFields = listOf(ImmutableField(type, "A00", type, AccessFlags.STATIC.value, null, null, null))))
+
+    @Test fun findsFdsColorsByShapeOnceItsNameIsGone(@TempDir temporary: Path) {
+        val classes = themeClasses().filter { it.type != FDS_COLORS } + unnamedFdsColors("LX/9TH;")
+        withThemeContext(temporary, classes) { context, resources ->
+            materialYouPatch.execute(context)
+            val resolver = context.classDefBy("LX/9TH;").methods.single { it.name == "A00" }.implementation!!
+            assertEquals(1, resolver.instructions.count {
+                (it as? ReferenceInstruction)?.reference.toString() == "Lapp/hushmessenger/extension/MaterialYouTheme;->fds(I)I"
+            })
+            assertTrue(resources.hasTheme())
+        }
+    }
+
+    @Test fun twoClassesShapedLikeFdsColorsChangeNothing(@TempDir temporary: Path) {
+        val classes = themeClasses().filter { it.type != FDS_COLORS } + unnamedFdsColors("LX/9TH;") + unnamedFdsColors("LX/9TI;")
+        withThemeContext(temporary, classes) { context, resources ->
+            assertEquals("Expected one FDSColors, found 2 by shape", assertFails { materialYouPatch.execute(context) }.message)
+            classes.forEach { assertSame(it, context.classDefBy(it.type)) }
+            assertFalse(resources.hasTheme())
+        }
+    }
+
+    /** #132: the light scheme's resolver hands its blues to migLight; a build without the scheme still gets the dark routes. */
+    @Test fun theLightSchemeGetsItsOwnHelperAndCanBeAbsent(@TempDir temporary: Path) {
+        fun helpers(context: BytecodePatchContext, type: String) = context.classDefBy(type).methods.single().implementation!!
+            .instructions.mapNotNull { (it as? ReferenceInstruction)?.reference?.toString()?.takeIf { ref -> ref.startsWith("Lapp/hushmessenger/") } }
+        withThemeContext(temporary.resolve("light"), themeClasses()) { context, resources ->
+            materialYouPatch.execute(context)
+            assertEquals(listOf("Lapp/hushmessenger/extension/MaterialYouTheme;->migLight(I)I"), helpers(context, LIGHT_SCHEME))
+            assertEquals(listOf("Lapp/hushmessenger/extension/MaterialYouTheme;->mig(I)I"), helpers(context, DARK_SCHEME))
+            assertTrue(resources.hasTheme())
+        }
+        val withoutLight = themeClasses().filter { it.type != LIGHT_SCHEME }
+        withThemeContext(temporary.resolve("no-light"), withoutLight) { context, resources ->
+            materialYouPatch.execute(context)
+            assertEquals(listOf("Lapp/hushmessenger/extension/MaterialYouTheme;->mig(I)I"), helpers(context, DARK_SCHEME))
+            assertTrue(resources.hasTheme())
+        }
+    }
+
+    @Test fun aLightSchemeWithTwoResolversChangesNothing(@TempDir temporary: Path) {
+        val classes = themeClasses().filter { it.type != LIGHT_SCHEME } + ImmutableClassDef.of(fixtureClass(LIGHT_SCHEME, listOf(
+            tokenMethod("Eiq", "LX/Token;", "color", owner = LIGHT_SCHEME), tokenMethod("Eir", "LX/Other;", "color", owner = LIGHT_SCHEME))))
+        withThemeContext(temporary, classes) { context, resources ->
+            assertEquals("LightColorScheme's color token method not found", assertFails { materialYouPatch.execute(context) }.message)
+            classes.forEach { assertSame(it, context.classDefBy(it.type)) }
+            assertFalse(resources.hasTheme())
+        }
+    }
+
     private fun themeClasses() = listOf(
         fixtureClass(DARK_SCHEME, listOf(tokenMethod("DCz", "LX/Token;", "color"))),
+        fixtureClass(LIGHT_SCHEME, listOf(tokenMethod("Eiq", "LX/Token;", "color", owner = LIGHT_SCHEME))),
         fixtureClass(FDS_COLORS, listOf(fixtureMethod("$FDS_COLORS->A00(Landroid/content/Context;II)I", """
             invoke-static {p0}, LX/DarkCheck;->dark(Landroid/content/Context;)Z
             move-result v0
@@ -234,7 +336,7 @@ class MaterialYouPatchTest {
                 .newInstance(config, resources.packageMetadata) as BytecodePatchContext
             val patchClasses = Class.forName("app.morphe.patcher.util.PatchClasses")
             BytecodePatchContext::class.java.getMethod("setPatchClasses\$morphe_patcher", patchClasses)
-                .invoke(context, patchClasses.getConstructor(Set::class.java).newInstance(classes.toSet()))
+                .invoke(context, patchClasses.getConstructor(Set::class.java, PatcherProgress::class.java).newInstance(classes.toSet(), null))
             context.use {
                 val capability = materialYouPatch.dependencies.filterIsInstance<ResourcePatch>().single()
                 capability.execute(resources)

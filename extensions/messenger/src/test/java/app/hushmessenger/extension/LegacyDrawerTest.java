@@ -132,6 +132,21 @@ public class LegacyDrawerTest {
         assertNull(hush.A07);
     }
 
+    /** #22: Hide the Menu row leaves the drawer stock only while the long-press shortcut is a proven way back. */
+    @Test public void hideTheMenuRowLeavesTheDrawerStockWhileTheShortcutIsAWayBack() {
+        List<?> source = Collections.emptyList();
+        Settings.preferences.edit().putBoolean("hide_menu_row", true).putBoolean(Settings.SHORTCUT_USED, true).commit();
+        try {
+            HostScreensTest.answerControlsShortcut(true);
+            assertSame(source, Settings.addLegacyDrawerEntry(new Fragment(RuntimeEnvironment.getApplication()), source));
+            assertEquals(0, FactoryShadow.calls);
+            HostScreensTest.answerControlsShortcut(false);
+            assertEquals("HushMessenger", added(Settings.addLegacyDrawerEntry(new Fragment(RuntimeEnvironment.getApplication()), source)).A06);
+        } finally {
+            HostScreens.controlsShortcut = null;
+        }
+    }
+
     @Test public void emptyDrawersStillGetTheRecoveryEntry() {
         List<?> source = Collections.emptyList();
         List<?> result = Settings.addLegacyDrawerEntry(new Fragment(RuntimeEnvironment.getApplication()), source);
@@ -215,7 +230,8 @@ public class LegacyDrawerTest {
         assertNull(Settings.drawerFolderClicked(added(result)));
         assertNotNull(Settings.hookErrors.get("menu_row"));
         assertFalse(Settings.hookErrors.get("menu_row").contains("private launch detail"));
-        assertEquals("Couldn't open HushMessenger settings. Long-press Messenger's home screen icon and try Patch controls.",
+        assertTrue(ShadowToast.showedToast("Couldn't open HushMessenger settings."));
+        assertEquals("Patch controls: long-press Messenger's home screen icon",
                 ShadowToast.getTextOfLatestToast());
         for (ShadowLog.LogItem item : ShadowLog.getLogsForTag("HushMessenger")) {
             assertFalse(item.msg.contains("private launch detail"));

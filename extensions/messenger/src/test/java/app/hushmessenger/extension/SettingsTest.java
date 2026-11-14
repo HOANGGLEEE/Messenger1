@@ -1,9 +1,6 @@
 package app.hushmessenger.extension;
 
-import android.app.Notification;
 import android.net.Uri;
-import android.os.Bundle;
-import android.view.View;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
@@ -25,7 +22,6 @@ public class SettingsTest {
     @Before public void reset() {
         Settings.initialize(RuntimeEnvironment.getApplication());
         Settings.preferences.edit().clear().commit();
-        AntiUnsendStore.get(RuntimeEnvironment.getApplication()).clearForTests();
         Settings.hookErrors.clear();
         Settings.metaAiTab = null;
         CrashGuard.resetForTests();
@@ -43,23 +39,26 @@ public class SettingsTest {
         assertTrue(Settings.hideMetaAiTab());
     }
 
-    @Test public void secondaryProcessProviderExposesOnlyTheCurrentKeepUnsentState() {
-        HostScreens.failed = false;
-        Settings.installed = java.util.Set.of("keep_unsent");
-        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
-        Bundle enabled = new SettingsProvider().call(
-            SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
-        assertTrue(enabled.getBoolean("enabled"));
-
+    @Test public void metaAiMentionRowsReadAsDisabledOnlyWhileTheSwitchIsOn() {
+        Object enabled = new Object();
+        Object disabled = new Object();
+        assertSame(enabled, Settings.hideMetaAiRow(enabled, disabled));
+        assertNull(Settings.hideMetaAiRow(null, disabled));
+        Settings.preferences.edit().putBoolean("meta_ai", true).commit();
+        assertSame(disabled, Settings.hideMetaAiRow(enabled, disabled));
+        assertSame(disabled, Settings.hideMetaAiRow(null, disabled));
         Settings.preferences.edit().putBoolean("paused", true).commit();
-        Bundle paused = new SettingsProvider().call(
-            SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
-        assertFalse(paused.getBoolean("enabled"));
+        assertSame(enabled, Settings.hideMetaAiRow(enabled, disabled));
+    }
 
-        Settings.preferences.edit().putBoolean("paused", false).putBoolean("safe_mode", true).commit();
-        Bundle safeMode = new SettingsProvider().call(
-            SettingsProvider.CALL_KEEP_UNSENT_ENABLED, null, null);
-        assertFalse(safeMode.getBoolean("enabled"));
+    @Test public void theSearchHintDropsMetaAiOnlyWhileTheSwitchIsOn() {
+        assertTrue(Settings.metaAiSearchHint(true));
+        assertFalse(Settings.metaAiSearchHint(false));
+        Settings.preferences.edit().putBoolean("meta_ai", true).commit();
+        assertFalse(Settings.metaAiSearchHint(true));
+        assertFalse(Settings.metaAiSearchHint(false));
+        Settings.preferences.edit().putBoolean("paused", true).commit();
+        assertTrue(Settings.metaAiSearchHint(true));
     }
 
     @Test public void allControlsPreserveStockUntilEnabled() {
@@ -87,45 +86,44 @@ public class SettingsTest {
         assertTrue(Settings.hideStories());
     }
 
-    @Test public void messageModelParserEntryCounterOnlyAdvancesWhenCaptureIsEnabled() {
+    /** The recaller's answer: true keeps the unsent message in its notification, and only Keep unsent messages asks for that. */
+    @Test @Config(sdk = {28, 36}) public void theRecallerKeepsTheNotificationOnlyWithKeepUnsentOn() {
+        Settings.activeAt.clear();
+        Settings.preferences.edit().putBoolean("keep_unsent", false).commit();
+        assertFalse(Settings.unsentRecall("mid.1"));
+        assertEquals(0, Settings.lastActive("keep_unsent"));
         Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
-        Settings.noteMessageModelParserEntry();
-        assertEquals(1, Settings.unsentModelParserEntries());
-
+        assertFalse(Settings.unsentRecall(null));
+        assertFalse(Settings.unsentRecall(""));
+        assertTrue(Settings.unsentRecall("mid.1"));
+        assertTrue(Settings.isKeptUnsent("mid.1"));
+        assertTrue(Settings.lastActive("keep_unsent") > 0);
         Settings.preferences.edit().putBoolean("paused", true).commit();
-        Settings.noteMessageModelParserEntry();
-        assertEquals(1, Settings.unsentModelParserEntries());
+        assertFalse(Settings.unsentRecall("mid.2"));
+        Settings.preferences.edit().putBoolean("paused", false).commit();
     }
 
-    @Test @Config(sdk = {28, 36}) public void legacyUnsendHelpersRecordHistoryWithoutChangingMessengerState() {
+    @Test @Config(sdk = {28, 36}) public void legacyUnsendHelpersRetainAndLabelOnlyRecordedMessages() {
         Settings.activeAt.clear();
         Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
         assertTrue(Settings.keepUnsent());
         assertEquals("Eligibility is not an interception", 0, Settings.lastActive("keep_unsent"));
-
-        // The render hook may cache plaintext for local history. The unsent predicate records
-        // true values, but always returns Messenger's original value unchanged.
         assertEquals("ordinary text", Settings.labelKeptUnsent("ordinary text", "other-message"));
         assertTrue(Settings.suppressUnsent(true, "other-message"));
-        assertFalse(Settings.suppressUnsent(false, "not-unsent"));
-        assertTrue("A true Messenger unsent predicate is a recorded event",
-            Settings.lastActive("keep_unsent") > 0);
-
+        assertEquals("Ordinary message reads are not interceptions", 0, Settings.lastActive("keep_unsent"));
         Settings.recordUnsent("retained-message");
         assertTrue(Settings.lastActive("keep_unsent") > 0);
         Settings.recordUnsent(null);
         Settings.recordUnsent("");
-        assertEquals(java.util.Set.of("other-message", "retained-message"),
-            Settings.preferences.getStringSet("kept_unsent_ids", java.util.Set.of()));
+        assertEquals(java.util.Set.of("retained-message"), Settings.preferences.getStringSet("kept_unsent_ids", java.util.Set.of()));
         assertTrue(Settings.isKeptUnsent("retained-message"));
         assertFalse(Settings.isKeptUnsent(null));
-
-        // A recorded revoke changes only the local archive. Messenger's text and unsent flag stay stock.
-        assertEquals("original text", Settings.labelKeptUnsent("original text", "retained-message"));
+        assertEquals("[unsent] original text", Settings.labelKeptUnsent("original text", "retained-message"));
+        assertEquals("ordinary text", Settings.labelKeptUnsent("ordinary text", "other-message"));
         assertNull(Settings.labelKeptUnsent(null, "retained-message"));
-        assertTrue(Settings.suppressUnsent(true, "retained-message"));
+        assertFalse(Settings.suppressUnsent(true, "retained-message"));
         assertFalse(Settings.suppressUnsent(false, "retained-message"));
-
+        assertTrue(Settings.suppressUnsent(true, "other-message"));
         for (String disabled : new String[] {"paused", "keep_unsent"}) {
             Settings.preferences.edit().putBoolean(disabled, "paused".equals(disabled)).commit();
             assertFalse(Settings.keepUnsent());
@@ -137,41 +135,33 @@ public class SettingsTest {
         }
     }
 
-    @Test @Config(sdk = {28, 36}) public void e2eeDeleteBatchRecordsEveryStringMessageId() {
+    @Test @Config(sdk = {28, 36}) public void unsentIdsAreBoundedWithoutTakingTheSettingsMonitor() throws Exception {
         Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
-        Settings.recordUnsentIds(java.util.Arrays.asList("e2ee-a", 7, null, "", "e2ee-b"));
-        assertEquals(java.util.Set.of("e2ee-a", "e2ee-b"),
-            Settings.preferences.getStringSet("kept_unsent_ids", java.util.Set.of()));
-        assertEquals(2, AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listUnsent(10).size());
+        Settings.keepUnsent();
+        var legacy = new java.util.HashSet<String>();
+        for (int i = 0; i < 5000; i++) legacy.add("old-" + i);
+        Settings.preferences.edit().putStringSet("kept_unsent_ids", legacy).commit();
+        var finished = new java.util.concurrent.CountDownLatch(1);
+        Thread writer = new Thread(() -> {
+            try { Settings.recordUnsent("old-0"); } finally { finished.countDown(); }
+        });
+        try {
+            synchronized (Settings.class) {
+                writer.start();
+                assertTrue("Recording must not acquire the UI/settings monitor", finished.await(3, java.util.concurrent.TimeUnit.SECONDS));
+            }
+        } finally { writer.join(5000); }
+        assertFalse(writer.isAlive());
+        assertEquals(4096, Settings.preferences.getStringSet("kept_unsent_ids", java.util.Set.of()).size());
+        assertTrue(Settings.isKeptUnsent("old-0"));
+        for (int i = 0; i < 10; i++) {
+            Settings.recordUnsent("new-" + i);
+            assertEquals(4096, Settings.preferences.getStringSet("kept_unsent_ids", java.util.Set.of()).size());
+            assertTrue(Settings.isKeptUnsent("new-" + i));
+        }
     }
 
-    private static final class MissingMetadataDownloader {
-        private final Object A07 = null;
-        private final String privateValue = "must-never-appear-in-debug";
-    }
-
-    private static final class CompletedImageResult {
-        private final Uri A00 = Uri.parse("file:///tmp/hush-test-image.jpg");
-        private final Object A01 = null;
-    }
-
-    @Test @Config(sdk = {28, 36}) public void missingMediaMetadataIsDiagnosedWithoutSerializingFieldValues() throws Exception {
-        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
-        Settings.captureDownloadedImageFromCallback(
-            new MissingMetadataDownloader(), new CompletedImageResult());
-
-        String report = UnsentDiagnostics.report(RuntimeEnvironment.getApplication());
-        assertTrue(report.contains("metadata_container_missing"));
-        assertFalse(report.contains("must-never-appear-in-debug"));
-
-        java.lang.reflect.Method shape = Settings.class.getDeclaredMethod("safeObjectShape", Object.class);
-        shape.setAccessible(true);
-        String summary = (String) shape.invoke(null, new MissingMetadataDownloader());
-        assertTrue(summary.contains("privateValue"));
-        assertFalse(summary.contains("must-never-appear-in-debug"));
-    }
-
-    @Test @Config(sdk = {28, 36}) public void retainedUnsendChoiceSurvivesRestartWithoutChangingStockUnsend() {
+    @Test @Config(sdk = {28, 36}) public void retainedUnsendChoiceSurvivesRestartWithoutClaimingChatCoverage() {
         Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
         Settings.recordUnsent("retained-message");
         Settings.preferences = null;
@@ -185,18 +175,16 @@ public class SettingsTest {
             Switch choice = root.findViewWithTag("keep_unsent");
             assertTrue(choice.isChecked());
             String spoken = choice.getContentDescription().toString();
-            assertTrue(spoken.contains("Keeps local message text and IDs"));
-            assertTrue(spoken.contains("photos are copied only after Messenger downloads them"));
-            assertTrue(spoken.contains("Notification snapshots are a separate fallback"));
-            assertTrue(spoken.contains("Group coverage is not verified"));
-            assertEquals("No unsend activity observed since restart",
+            assertTrue(spoken.contains("after someone unsends them"));
+            assertTrue(spoken.contains("In encrypted chats the message stays in its notification instead"));
+            assertTrue(spoken.contains("Group chats aren't tested"));
+            assertTrue(spoken.contains("Your own unsends may be limited"));
+            assertEquals("On. No unsent message received yet",
                 ((android.widget.TextView) root.findViewWithTag("active_keep_unsent")).getText().toString());
         }
-        assertEquals("original text", Settings.labelKeptUnsent("original text", "retained-message"));
-        assertTrue(Settings.suppressUnsent(true, "retained-message"));
-        assertFalse(Settings.suppressUnsent(false, "retained-message"));
-        assertTrue("Reading a retained unsent predicate is still observed as an event",
-            Settings.lastActive("keep_unsent") > 0);
+        assertEquals("[unsent] original text", Settings.labelKeptUnsent("original text", "retained-message"));
+        assertFalse(Settings.suppressUnsent(true, "retained-message"));
+        assertEquals("Reading an old retained message is not a new interception", 0, Settings.lastActive("keep_unsent"));
     }
 
     @Test @Config(sdk = {28, 36}) public void concurrentUnsendIdentifiersSurviveADiskReload() throws Exception {
@@ -239,8 +227,8 @@ public class SettingsTest {
         Settings.preferences = reloaded;
         assertEquals(expected, reloaded.getStringSet("kept_unsent_ids", java.util.Set.of()));
         assertTrue(reloaded.getBoolean("keep_unsent", false));
-        assertTrue(Settings.suppressUnsent(true, "from-old-version"));
-        assertEquals("text", Settings.labelKeptUnsent("text", "message-99"));
+        assertFalse(Settings.suppressUnsent(true, "from-old-version"));
+        assertEquals("[unsent] text", Settings.labelKeptUnsent("text", "message-99"));
     }
 
     @Test @Config(sdk = {28, 36}) public void inactiveUnsendCallsAddNothingAndKeepStockBehavior() {
@@ -256,74 +244,6 @@ public class SettingsTest {
             assertEquals("text", Settings.labelKeptUnsent("text", "existing-message"));
             assertTrue(Settings.suppressUnsent(true, "existing-message"));
             assertFalse(Settings.suppressUnsent(false, "existing-message"));
-        }
-    }
-
-    @Test @Config(sdk = {28, 36}) public void renderedTextIsCachedForHistoryWithoutBeingRestoredIntoMessenger() {
-        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
-        assertEquals("cached before revoke", Settings.labelKeptUnsent("cached before revoke", "cached-message"));
-        Settings.recordUnsent("cached-message");
-        assertNull(Settings.labelKeptUnsent(null, "cached-message"));
-        assertEquals("cached before revoke", Settings.cachedUnsentText("cached-message"));
-        assertEquals(1, Settings.unsentCaptureHits());
-        assertEquals(1, Settings.unsentCaptureSaved());
-        assertEquals(1, Settings.unsentRevokeHits());
-        assertEquals(1, Settings.unsentRevokeSaved());
-        assertEquals(1, AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listUnsent(10).size());
-    }
-
-    @Test @Config(sdk = {28, 36}) public void notificationFallbackArchivesVisibleTextWithoutCallingItUnsent() {
-        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
-        Notification notification = new Notification();
-        notification.when = 123_000L;
-        notification.extras = new Bundle();
-
-        Bundle first = new Bundle();
-        first.putCharSequence("sender", "Alice");
-        first.putCharSequence("text", "first unseen");
-        first.putLong("time", 123_001L);
-        Bundle second = new Bundle();
-        second.putCharSequence("sender", "Alice");
-        second.putCharSequence("text", "second unseen");
-        second.putLong("time", 123_002L);
-        notification.extras.putParcelableArray("android.messages",
-            new android.os.Parcelable[] {first, second});
-
-        Settings.captureNotification(notification);
-
-        java.util.List<AntiUnsendStore.NotificationEntry> snapshots =
-            AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listNotificationSnapshots(30);
-        assertEquals(2, snapshots.size());
-        assertEquals("second unseen", snapshots.get(0).text);
-        assertEquals("Alice", snapshots.get(0).title);
-        assertTrue(AntiUnsendStore.get(RuntimeEnvironment.getApplication()).listUnsent(10).isEmpty());
-        assertEquals(1, Settings.unsentNotificationHits());
-        assertEquals(2, Settings.unsentNotificationSaved());
-
-        // Reposting the same MessagingStyle payload is de-duplicated by title, text and message time.
-        Settings.captureNotification(notification);
-        assertEquals(2, AntiUnsendStore.get(RuntimeEnvironment.getApplication())
-            .listNotificationSnapshots(30).size());
-        assertEquals(2, Settings.unsentNotificationHits());
-        assertEquals(2, Settings.unsentNotificationSaved());
-    }
-
-    @Test public void settingsExposeLocalUnsentHistoryFromFixedNavigation() {
-        try (var controller = Robolectric.buildActivity(SettingsActivity.class).setup()) {
-            View history = controller.get().getWindow().getDecorView().findViewWithTag("tab_history");
-            assertNotNull("History is a fixed top-level destination", history);
-            assertTrue(history.isShown());
-            assertNull("History is no longer buried in the Privacy settings", 
-                controller.get().getWindow().getDecorView().findViewWithTag("unsent_history"));
-            history.performClick();
-            Intent launched = Shadows.shadowOf(controller.get()).getNextStartedActivity();
-            assertNotNull(launched);
-            boolean direct = launched.getComponent() != null &&
-                UnsentHistoryActivity.class.getName().equals(launched.getComponent().getClassName());
-            boolean hosted = launched.getComponent() != null &&
-                HostScreens.SCREEN_HOST.equals(launched.getComponent().getClassName()) &&
-                HostScreens.HISTORY.equals(launched.getStringExtra(HostScreens.EXTRA));
-            assertTrue("History navigation opens the dedicated history screen", direct || hosted);
         }
     }
 
@@ -405,7 +325,7 @@ public class SettingsTest {
         }
     }
 
-    /** Shaped like Messenger 580's Menu tab folder row (HRf): context, key, metadata, badge and one title. */
+    /** Shaped like Messenger's Menu tab folder row: context, key, metadata, badge and one title. */
     static class FakeDrawerFolderKey {
         final String name;
         FakeDrawerFolderKey(String name) { this.name = name; }
@@ -480,6 +400,35 @@ public class SettingsTest {
         assertEquals(java.util.List.of(qrCode), qrOnly);
     }
 
+    /** #22: both menus lose the row only while Hide the Menu row is on and the long-press shortcut has proved itself. */
+    @Test public void hideTheMenuRowNeedsTheShortcutToHaveOpenedSettingsAndStillBeThere() {
+        var application = RuntimeEnvironment.getApplication();
+        java.util.List<Object> side = java.util.List.of(new Object(), new Object());
+        try {
+            HostScreensTest.answerControlsShortcut(true);
+            Settings.preferences.edit().putBoolean("hide_menu_row", true).commit();
+            assertEquals("not opened from the shortcut yet", 2, menuRows(application).size());
+            Settings.noteShortcutUsed();
+            assertEquals(1, menuRows(application).size());
+            assertSame(side, Settings.addMenuDrawerEntry(side));
+            HostScreensTest.answerControlsShortcut(false);
+            assertEquals("the shortcut went missing", 2, menuRows(application).size());
+            HostScreensTest.answerControlsShortcut(true);
+            Settings.preferences.edit().putBoolean("hide_menu_row", false).commit();
+            assertEquals(2, menuRows(application).size());
+            assertTrue(Settings.hookErrors.isEmpty());
+        } finally {
+            HostScreens.controlsShortcut = null;
+        }
+    }
+
+    private static java.util.ArrayList<Object> menuRows(Context context) {
+        java.util.ArrayList<Object> rows = new java.util.ArrayList<>(
+            java.util.List.of(new FolderRow(context, new FakeSettingsFolderKey(), null, null, "Settings")));
+        Settings.addMenuSettingsEntry(rows);
+        return rows;
+    }
+
     @Test public void menuSettingsRowLeavesListsItCannotLabelAlone() {
         java.util.ArrayList<Object> rows = new java.util.ArrayList<>(java.util.List.of(new TwoTitleRow()));
         Settings.addMenuSettingsEntry(rows);
@@ -506,7 +455,7 @@ public class SettingsTest {
         assertTrue((launched.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0);
     }
 
-    /** Shaped like Messenger 580's keyboard tab: an activate event plus int icon and label fields. */
+    /** Shaped like Messenger's keyboard tab: an activate event plus int icon and label fields. */
     static final class KeyboardTab {
         final Object event;
         final int icon = 7;
@@ -517,14 +466,43 @@ public class SettingsTest {
         KeyboardTab emoji = new KeyboardTab(new Object());
         KeyboardTab avatar = new KeyboardTab(new com.facebook.xapp.messaging.composer.avatar.composertab.event.ActivateAvatarSticker());
         KeyboardTab gifs = new KeyboardTab("gifs");
-        java.util.List<Object> tabs = java.util.List.of(emoji, avatar, gifs);
-        assertNull(Settings.filterKeyboardTabs(tabs));
-        Settings.preferences.edit().putBoolean("avatar_stickers", true).apply();
-        assertEquals(java.util.List.of(emoji, gifs), Settings.filterKeyboardTabs(tabs));
-        assertNull(Settings.filterKeyboardTabs(java.util.List.of(emoji, gifs)));
-        assertNull(Settings.filterKeyboardTabs(null));
-        Settings.preferences.edit().putBoolean("paused", true).apply();
-        assertNull(Settings.filterKeyboardTabs(tabs));
+        java.util.List<Object> tabs = new java.util.ArrayList<>(java.util.List.of(emoji, avatar, gifs));
+        Settings.preferences.edit().putBoolean("avatar_stickers", true).putBoolean("paused", true).apply();
+        Settings.removeAvatarTabs(tabs);
+        assertEquals(3, tabs.size());
+        Settings.preferences.edit().putBoolean("paused", false).apply();
+        Settings.removeAvatarTabs(tabs);
+        assertEquals(java.util.List.of(emoji, gifs), tabs);
+    }
+
+    /** Messenger draws emoji on several threads at once, and the font is loaded once for all of them. */
+    @Test public void threadsThatAskForTheSystemEmojiFontTogetherGetOneTypeface() throws Exception {
+        String font = Settings.systemEmojiFont;
+        java.util.concurrent.ExecutorService threads = java.util.concurrent.Executors.newFixedThreadPool(8);
+        try {
+            // Robolectric's default Typeface stand-in loads any path, as a new typeface each time.
+            Settings.systemEmojiFont = "/system/fonts/AnyColorEmoji.ttf";
+            Settings.systemEmoji = null;
+            Settings.systemEmojiMissing = false;
+            Settings.preferences.edit().putBoolean("use_system_emoji", true).apply();
+            java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(8);
+            java.util.List<java.util.concurrent.Future<android.graphics.Typeface>> asks = new java.util.ArrayList<>();
+            for (int i = 0; i < 8; i++) asks.add(threads.submit(() -> {
+                together.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                return Settings.systemEmojiTypeface();
+            }));
+            java.util.Set<android.graphics.Typeface> got = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            for (var ask : asks) got.add(ask.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(1, got.size());
+            assertNotNull(got.iterator().next());
+            assertEquals("/system/fonts/AnyColorEmoji.ttf", Settings.systemEmojiSource);
+        } finally {
+            threads.shutdownNow();
+            Settings.systemEmojiFont = font;
+            Settings.systemEmoji = null;
+            Settings.systemEmojiMissing = false;
+            Settings.systemEmojiSource = null;
+        }
     }
 
     // Robolectric's default Typeface stand-in accepts any path; the native one fails on a missing file like a phone does.
@@ -556,6 +534,27 @@ public class SettingsTest {
         }
     }
 
+    @Test public void aHealthyControlsUseMovesOnceASecondAndAFailedOnesEveryTime() {
+        Settings.activeAt.clear();
+        Settings.hookErrors.clear();
+        Settings.preferences.edit().putBoolean("keep_unsent", true).commit();
+        assertTrue(Settings.enabled("keep_unsent"));
+        long used = Settings.lastActive("keep_unsent");
+        assertTrue(used > 0);
+        Settings.activeAt.put("keep_unsent", used - 1);
+        assertTrue(Settings.enabled("keep_unsent"));
+        assertEquals("a use within the second isn't written again", used - 1, Settings.lastActive("keep_unsent"));
+        Settings.activeAt.put("keep_unsent", used - 5000);
+        assertTrue(Settings.enabled("keep_unsent"));
+        assertTrue(Settings.lastActive("keep_unsent") >= used);
+
+        Settings.hookErrors.put("keep_unsent", "java.lang.RuntimeException at Settings.enabled|" + used);
+        Settings.activeAt.put("keep_unsent", used - 1);
+        assertTrue(Settings.enabled("keep_unsent"));
+        assertTrue("after a failure every use counts, so a working draw clears the error", Settings.lastActive("keep_unsent") >= used);
+        Settings.hookErrors.clear();
+    }
+
     // #25: a phone's emoji font isn't always NotoColorEmoji.ttf (Samsung ships SamsungColorEmoji.ttf, emoji modules
     // and other phones use their own), so Android 12+ uses the font Android itself shapes emoji with.
     @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
@@ -577,6 +576,268 @@ public class SettingsTest {
             Settings.systemEmojiMissing = false;
             Settings.systemEmojiSource = null;
         }
+    }
+
+    // #34: the phone's emoji font has no glyph for Messenger's own Like (U+F0000), so Messenger's font sits behind it.
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    @Test @Config(sdk = {31, 36}) public void systemEmojiKeepsMessengersOwnLikeGlyph() throws Exception {
+        assertMessengerLikeSurvives(null);
+    }
+
+    // Where Android 12+ can't say which font it shapes emoji with, the phone's font comes from a file path instead.
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    @Test @Config(sdk = 31) public void systemEmojiFromAFontFileKeepsMessengersOwnLikeGlyph() throws Exception {
+        String probe = Settings.EMOJI_PROBE;
+        assertMessengerLikeSurvives(android.graphics.text.TextRunShaper.shapeTextRun(probe, 0, probe.length(), 0,
+            probe.length(), 0f, 0f, false, new android.graphics.Paint()).getFont(0).getFile().getPath());
+    }
+
+    private void assertMessengerLikeSurvives(String systemFontPath) throws Exception {
+        // Paint loads the native graphics runtime; Typeface's static setup fails if it comes first.
+        android.graphics.Paint paint = new android.graphics.Paint();
+        java.io.File messengerFont = java.io.File.createTempFile("FacebookEmoji", ".ttf");
+        // Not under a "fonts" resource folder: Robolectric copies Android's fonts from the first "fonts/" on the classpath.
+        try (java.io.InputStream in = getClass().getResourceAsStream("/messenger-emoji/like-only.ttf")) {
+            java.nio.file.Files.copy(in, messengerFont.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+        String like = new String(Character.toChars(0xF0000));
+        android.graphics.Typeface messenger = android.graphics.Typeface.createFromFile(messengerFont);
+        String font = Settings.systemEmojiFont;
+        try {
+            resetEmoji();
+            Settings.systemEmojiFont = systemFontPath;
+            Settings.preferences.edit().putBoolean("use_system_emoji", false).apply();
+            assertSame(messenger, Settings.systemEmojiTypeface(messenger));
+            Settings.preferences.edit().putBoolean("use_system_emoji", true).apply();
+            android.graphics.Typeface system = Settings.systemEmojiTypeface();
+            assertNotNull(system);
+            // Until Messenger has loaded its font once there's nothing to fall back on.
+            assertSame(system, Settings.systemEmojiTypeface(messenger));
+            Settings.messengerEmojiFont(messengerFont);
+            android.graphics.Typeface merged = Settings.systemEmojiTypeface(messenger);
+            assertNotSame(system, merged);
+            assertSame(merged, Settings.systemEmojiTypeface(messenger));
+            // Messenger may ask before its own typeface is ready; the font file is what counts.
+            assertSame(merged, Settings.systemEmojiTypeface(null));
+            // One line per change of path, so a report's logcat shows which one the phone took.
+            assertEquals(1, org.robolectric.shadows.ShadowLog.getLogsForTag("HushMessenger").stream()
+                .filter(log -> log.msg.startsWith("use_system_emoji: phone emoji with Messenger's font behind it")).count());
+            paint.setTypeface(system);
+            assertFalse(paint.hasGlyph(like));
+            paint.setTypeface(merged);
+            assertTrue(paint.hasGlyph(like));
+            assertTrue(paint.hasGlyph(Settings.EMOJI_PROBE));
+            assertNull(Settings.hookErrors.get("use_system_emoji"));
+            // The next run, right after an update: Messenger asks before its font loads and keeps that answer, so the
+            // file from the last run stands in (#34).
+            Settings.messengerEmojiFile = null;
+            Settings.mergedEmojiFile = null;
+            Settings.mergedEmoji = null;
+            android.graphics.Typeface early = Settings.systemEmojiTypeface(null);
+            assertNotSame(system, early);
+            paint.setTypeface(early);
+            assertTrue(paint.hasGlyph(like));
+            // A remembered file that's gone leaves the phone's emoji until Messenger loads its font again.
+            Settings.mergedEmojiFile = null;
+            Settings.mergedEmoji = null;
+            Settings.preferences.edit().putString(Settings.EMOJI_FONT_PATH, messengerFont.getPath() + ".gone").apply();
+            assertSame(system, Settings.systemEmojiTypeface(null));
+            // Off again: Messenger's own typeface, untouched.
+            Settings.preferences.edit().putBoolean("use_system_emoji", false).apply();
+            assertSame(messenger, Settings.systemEmojiTypeface(messenger));
+        } finally {
+            Settings.systemEmojiFont = font;
+            resetEmoji();
+            messengerFont.delete();
+        }
+    }
+
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    @Test @Config(sdk = 31) public void anUnreadableMessengerFontLeavesThePhonesEmoji() throws Exception {
+        new android.graphics.Paint();
+        try {
+            resetEmoji();
+            Settings.preferences.edit().putBoolean("use_system_emoji", true).apply();
+            android.graphics.Typeface system = Settings.systemEmojiTypeface();
+            Settings.messengerEmojiFont(new java.io.File("/nonexistent/FacebookEmoji.ttf"));
+            assertSame(system, Settings.systemEmojiTypeface(android.graphics.Typeface.DEFAULT));
+            assertSame(system, Settings.systemEmojiTypeface(android.graphics.Typeface.DEFAULT));
+            String failure = Settings.hookErrors.get("use_system_emoji");
+            assertNotNull(failure);
+            assertFalse(failure.contains("nonexistent"));
+        } finally {
+            resetEmoji();
+        }
+    }
+
+    /** #34 follow-up: before a phone has Messenger's emoji font, a Like in the chat list is a box, stock Messenger too. */
+    @Test public void theChatListLikeIsAThumbsUpOnlyUntilMessengersFontIsKnown() throws Exception {
+        String like = new String(Character.toChars(0xF0000)), thumbs = new String(Character.toChars(0x1F44D));
+        java.io.File messengerFont = java.io.File.createTempFile("FacebookEmoji", ".ttf");
+        try {
+            resetEmoji();
+            Settings.activeAt.clear();
+            String snippet = "You: " + like;
+            assertSame("Off leaves it as Messenger wrote it", snippet, Settings.chatListSnippet(snippet));
+            assertEquals(0, Settings.lastActive("use_system_emoji"));
+            Settings.preferences.edit().putBoolean("use_system_emoji", true).commit();
+            assertEquals("You: " + thumbs, Settings.chatListSnippet(snippet).toString());
+            assertTrue("A swap is a use", Settings.lastActive("use_system_emoji") > 0);
+            assertEquals(thumbs + " ok " + thumbs, Settings.chatListSnippet(like + " ok " + like).toString());
+            String plain = "See you at 5";
+            assertSame("Nothing to swap", plain, Settings.chatListSnippet(plain));
+            assertNull(Settings.chatListSnippet(null));
+
+            // Both are two chars long, so a span over the sender's name stays on it.
+            android.text.SpannableString styled = new android.text.SpannableString("Sam: " + like + " hi");
+            Object bold = new android.text.style.StyleSpan(android.graphics.Typeface.BOLD);
+            styled.setSpan(bold, 0, 3, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            CharSequence swapped = Settings.chatListSnippet(styled);
+            assertEquals("Sam: " + thumbs + " hi", swapped.toString());
+            assertEquals(0, ((android.text.Spanned) swapped).getSpanStart(bold));
+            assertEquals(3, ((android.text.Spanned) swapped).getSpanEnd(bold));
+            assertEquals("Messenger's own text isn't changed in place", "Sam: " + like + " hi", styled.toString());
+            // Each text keeps its class, so nothing Messenger casts it to breaks.
+            assertSame(android.text.SpannableString.class, swapped.getClass());
+            android.text.SpannableStringBuilder built = new android.text.SpannableStringBuilder("You: " + like);
+            CharSequence swappedBuilt = Settings.chatListSnippet(built);
+            assertSame(android.text.SpannableStringBuilder.class, swappedBuilt.getClass());
+            assertNotSame(built, swappedBuilt);
+            assertEquals("You: " + like, built.toString());
+            assertSame(android.text.SpannedString.class,
+                Settings.chatListSnippet(new android.text.SpannedString("You: " + like)).getClass());
+            StringBuilder unknown = new StringBuilder("You: " + like);
+            assertSame("A type it can't rebuild stays as it is", unknown, Settings.chatListSnippet(unknown));
+
+            // Last run's font file, still there: Use system emoji draws the Like from it already.
+            Settings.preferences.edit().putString(Settings.EMOJI_FONT_PATH, messengerFont.getPath()).commit();
+            assertSame(snippet, Settings.chatListSnippet(snippet));
+            Settings.preferences.edit().putString(Settings.EMOJI_FONT_PATH, messengerFont.getPath() + ".gone").commit();
+            assertEquals("A remembered file that's gone doesn't count", "You: " + thumbs, Settings.chatListSnippet(snippet).toString());
+            // Messenger loading its font in this run.
+            Settings.messengerEmojiFont(new java.io.File(messengerFont.getPath() + ".gone"));
+            assertSame(snippet, Settings.chatListSnippet(snippet));
+
+            Settings.messengerEmojiFile = null;
+            Settings.preferences.edit().remove(Settings.EMOJI_FONT_PATH).putBoolean("paused", true).commit();
+            assertSame("Pause leaves it as Messenger wrote it", snippet, Settings.chatListSnippet(snippet));
+            assertNull(Settings.hookErrors.get("use_system_emoji"));
+        } finally {
+            resetEmoji();
+            messengerFont.delete();
+        }
+    }
+
+    /** Messenger keeps its first emoji typeface for the run, so knowing the font file later doesn't bring the Like back. */
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    @Test @Config(sdk = 31) public void aRunThatStartedWithoutMessengersFontKeepsTheThumbsUp() throws Exception {
+        new android.graphics.Paint();
+        String like = new String(Character.toChars(0xF0000)), thumbs = new String(Character.toChars(0x1F44D));
+        java.io.File messengerFont = java.io.File.createTempFile("FacebookEmoji", ".ttf");
+        try (java.io.InputStream in = getClass().getResourceAsStream("/messenger-emoji/like-only.ttf")) {
+            java.nio.file.Files.copy(in, messengerFont.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+        String snippet = "You: " + like;
+        try {
+            resetEmoji();
+            Settings.preferences.edit().putBoolean("use_system_emoji", true).commit();
+            // A fresh install: Messenger asks before its font has downloaded, then the font turns up mid-run.
+            android.graphics.Typeface system = Settings.systemEmojiTypeface();
+            assertSame(system, Settings.systemEmojiTypeface(null));
+            Settings.messengerEmojiFont(messengerFont);
+            assertEquals("You: " + thumbs, Settings.chatListSnippet(snippet).toString());
+
+            // The next start asks with the file known and gets Messenger's font behind the phone's.
+            Settings.likeWithoutFont = false;
+            assertNotSame(system, Settings.systemEmojiTypeface(null));
+            assertSame(snippet, Settings.chatListSnippet(snippet));
+
+            // A merge that fails leaves the phone's font alone, so the thumbs up comes back.
+            Settings.likeWithoutFont = false;
+            Settings.messengerEmojiFont(new java.io.File(messengerFont.getPath() + ".gone"));
+            assertSame(system, Settings.systemEmojiTypeface(null));
+            assertEquals("You: " + thumbs, Settings.chatListSnippet(snippet).toString());
+        } finally {
+            resetEmoji();
+            messengerFont.delete();
+        }
+    }
+
+    /** Android 9 can't put Messenger's font behind the phone's, so with Use system emoji on the Like is always a box there. */
+    @Test @Config(sdk = 28) public void androidNineAlwaysShowsTheChatListLikeAsAThumbsUp() throws Exception {
+        String like = new String(Character.toChars(0xF0000)), thumbs = new String(Character.toChars(0x1F44D));
+        java.io.File messengerFont = java.io.File.createTempFile("FacebookEmoji", ".ttf");
+        String snippet = "You: " + like;
+        try {
+            resetEmoji();
+            Settings.preferences.edit().putBoolean("use_system_emoji", true)
+                .putString(Settings.EMOJI_FONT_PATH, messengerFont.getPath()).commit();
+            assertEquals("You: " + thumbs, Settings.chatListSnippet(snippet).toString());
+            // The phone's emoji font didn't load, so Messenger draws with its own typeface, as stock does.
+            Settings.systemEmojiMissing = true;
+            assertSame(snippet, Settings.chatListSnippet(snippet));
+        } finally {
+            resetEmoji();
+            messengerFont.delete();
+        }
+    }
+
+    /** A font that's still being written fails the merge once, so the same file gets three tries and then no more. */
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    @Test @Config(sdk = 31) public void aFailedEmojiMergeIsRetriedOnTheSameFileUpToThreeTimes() throws Exception {
+        android.graphics.Paint paint = new android.graphics.Paint();
+        String probe = Settings.EMOJI_PROBE;
+        String font = Settings.systemEmojiFont;
+        java.io.File late = java.io.File.createTempFile("FacebookEmoji", ".ttf");
+        java.io.File never = java.io.File.createTempFile("FacebookEmoji", ".ttf");
+        assertTrue(late.delete() && never.delete());
+        String like = new String(Character.toChars(0xF0000));
+        try {
+            resetEmoji();
+            Settings.systemEmojiFont = android.graphics.text.TextRunShaper.shapeTextRun(probe, 0, probe.length(), 0,
+                probe.length(), 0f, 0f, false, paint).getFont(0).getFile().getPath();
+            Settings.preferences.edit().putBoolean("use_system_emoji", true).apply();
+            android.graphics.Typeface system = Settings.systemEmojiTypeface();
+            assertNotNull(system);
+            Settings.messengerEmojiFont(late);
+            assertSame("the file isn't there yet", system, Settings.systemEmojiTypeface(null));
+            copyLikeFont(late);
+            android.graphics.Typeface merged = Settings.systemEmojiTypeface(null);
+            assertNotSame("the second try on the same file merges", system, merged);
+            paint.setTypeface(merged);
+            assertTrue(paint.hasGlyph(like));
+            // A file that keeps failing is given up on after its third try, even once it turns up.
+            Settings.messengerEmojiFont(never);
+            for (int i = 0; i < 3; i++) assertSame(system, Settings.systemEmojiTypeface(null));
+            copyLikeFont(never);
+            assertSame(system, Settings.systemEmojiTypeface(null));
+        } finally {
+            Settings.systemEmojiFont = font;
+            resetEmoji();
+            late.delete();
+            never.delete();
+        }
+    }
+
+    private void copyLikeFont(java.io.File target) throws java.io.IOException {
+        try (java.io.InputStream in = getClass().getResourceAsStream("/messenger-emoji/like-only.ttf")) {
+            java.nio.file.Files.copy(in, target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static void resetEmoji() {
+        Settings.systemEmoji = null;
+        Settings.systemEmojiMissing = false;
+        Settings.systemEmojiSource = null;
+        Settings.systemEmojiShaped = null;
+        Settings.messengerEmojiFile = null;
+        Settings.mergedEmojiFile = null;
+        Settings.mergedEmoji = null;
+        Settings.mergeTries = 0;
+        Settings.likeWithoutFont = false;
+        Settings.lastEmojiLog = null;
+        if (Settings.preferences != null) Settings.preferences.edit().remove(Settings.EMOJI_FONT_PATH).apply();
+        Settings.hookErrors.remove("use_system_emoji");
     }
 
     @Test @Config(sdk = 28) public void systemEmojiBeforeAndroid12KeepsAndroidsStandardEmojiFont() {

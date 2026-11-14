@@ -8,6 +8,7 @@ import app.morphe.patcher.patch.BytecodePatch
 import app.morphe.patcher.patch.BytecodePatchContext
 import app.morphe.patcher.patch.Patch
 import app.morphe.patcher.patch.ResourcePatchContext
+import com.android.tools.smali.dexlib2.AccessFlags
 import com.android.tools.smali.dexlib2.Opcodes
 import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile
 import com.android.tools.smali.dexlib2.iface.ClassDef
@@ -28,7 +29,7 @@ import kotlin.test.assertNull
 class ControlLifecycleTest {
     private data class Selection(
         val name: String,
-        val patches: Set<Patch<*>>,
+        val patches: Set<Patch>,
         val keys: Set<String>,
         val failed: BytecodePatch? = null,
     )
@@ -108,9 +109,9 @@ class ControlLifecycleTest {
     }
 
     private fun targetTypes(key: String): Set<String> = when (key) {
-        "menu_row" -> BASE_PROFILE.hooks.getValue("menu_settings").map { it.substringBefore("->") }.toSet()
-        "people" -> listOf("people", "people_list_end", "people_jewel", "people_tab", "people_search", "people_story")
-            .flatMap { BASE_PROFILE.hooks.getValue(it) }.map { it.substringBefore("->") }.toSet()
+        "menu_row" -> SYNTHETIC_PROFILE.hooks.getValue("menu_settings").map { it.substringBefore("->") }.toSet()
+        "people" -> listOf("people", "people_list_end", "people_jewel", "people_tab", "people_search", "people_story", INBOX_REFRESH_HOOK)
+            .flatMap { SYNTHETIC_PROFILE.hooks.getValue(it) }.map { it.substringBefore("->") }.toSet()
         "material_you" -> setOf(DARK_SCHEME, FDS_COLORS, "LX/DarkCheck;", "LX/ThemeColors;")
         else -> error("Unexpected fixture control $key")
     }
@@ -127,9 +128,12 @@ class ControlLifecycleTest {
         }
         assertEquals(1, count("provider", "app.hushmessenger.extension.SettingsProvider"), selection.name)
         assertEquals(1, count("activity", "app.hushmessenger.extension.SettingsActivity"), selection.name)
-        assertEquals(1, count("activity", "app.hushmessenger.extension.UnsentHistoryActivity"), selection.name)
         assertEquals(1, count("activity", "app.hushmessenger.extension.RestartActivity"), selection.name)
         assertEquals(1, count("activity-alias", "app.hushmessenger.extension.SettingsLauncher"), selection.name)
+        // Settings run in their own task, which Recents would otherwise list as a second card beside Messenger's.
+        val settings = document.getElementsByTagName("activity").let { nodes -> (0 until nodes.length).map { nodes.item(it) as Element } }
+            .single { it.getAttribute("android:name") == "app.hushmessenger.extension.SettingsActivity" }
+        assertEquals("true", settings.getAttribute("android:excludeFromRecents"), selection.name)
     }
 
     private fun assertPatchedClasses(classes: List<ClassDef>, native: List<ClassDef>, extensionTypes: Set<String>, selection: Selection) {
@@ -141,6 +145,16 @@ class ControlLifecycleTest {
         assertEquals(selection.keys.sorted().joinToString(","),
             ((controls.implementation!!.instructions.first() as ReferenceInstruction).reference as StringReference).string,
             "${selection.name}: finalized bundled controls")
+        // Only a People run that applied hands the extension its proved chat list route.
+        val route = host.methods.single { it.hookId() == INBOX_REFRESH_ROUTE }
+        assertEquals(if ("people" in selection.keys) INBOX_ROUTE.toString() else "",
+            ((route.implementation!!.instructions.first() as ReferenceInstruction).reference as StringReference).string,
+            "${selection.name}: chat list route")
+        // Every run records the build it started from, which the manifest's own mapping names here.
+        val build = host.methods.single { it.hookId() == ORIGINAL_BUILD }
+        assertEquals("587.0.0.54.96|$LIFECYCLE_VERSION_CODE|$LIFECYCLE_VERSION_CODE",
+            ((build.implementation!!.instructions.first() as ReferenceInstruction).reference as StringReference).string,
+            "${selection.name}: original build")
         val factory = classes.single { it.type == FACTORY_TYPE }
         for ((method, call) in mapOf(
             INSTANTIATE_ACTIVITY to "$HOST_SCREENS->activityFor(Ljava/lang/String;Landroid/content/Intent;)Landroid/app/Activity;",
@@ -148,6 +162,12 @@ class ControlLifecycleTest {
         )) assertEquals(1, factory.methods.single { it.hookId() == method }.implementation!!.instructions.count {
             (it as? ReferenceInstruction)?.reference.toString() == call
         }, "${selection.name}: single $call injection")
+        // Messenger's shortcut writes now call these, so each is a static HostScreens method of exactly that shape, and none
+        // is left going straight to Android.
+        for (helper in SHORTCUT_WRITES.values) assertEquals(1, host.methods.count {
+            it.hookId() == helper && AccessFlags.STATIC.isSet(it.accessFlags)
+        }, "${selection.name}: $helper")
+        assertEquals(emptyMap(), shortcutWriters(classes), "${selection.name}: direct shortcut writes")
         val settings = classes.single { it.type == SETTINGS }
         assertEquals(1, settings.methods.count { it.hookId() == LEGACY_SECTION }, selection.name)
         assertEquals(1, settings.directMethods.count { it.hookId() == LEGACY_SECTION }, selection.name)

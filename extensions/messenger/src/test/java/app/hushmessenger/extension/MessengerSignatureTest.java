@@ -43,6 +43,7 @@ public class MessengerSignatureTest {
 
     private static void reset() {
         MessengerSignature.ownSigners = null;
+        MessengerSignature.ownPackage = null;
         for (int i = 0; i < MessengerSignature.CALLER_OUTCOMES.length; i++) MessengerSignature.callerCounts.set(i, 0);
     }
 
@@ -82,10 +83,34 @@ public class MessengerSignatureTest {
     }
 
     @Test public void messengerItselfAlwaysGetsMetasCertificate() throws Exception {
+        MessengerSignature.ownPackage = "com.facebook.orca";
         PackageInfo messenger = new PackageInfo();
         messenger.packageName = "com.facebook.orca";
         assertMetaCertificate(MessengerSignature.originalSigners(messenger));
         assertNull(MessengerSignature.originalSigners(null));
+    }
+
+    @Test public void aCloneAnswersForItsOwnNameAndNotForTheMessengerBesideIt() throws Exception {
+        MessengerSignature.ownPackage = "com.facebook.orca.hush";
+        PackageInfo clone = new PackageInfo();
+        clone.packageName = "com.facebook.orca.hush";
+        assertMetaCertificate(MessengerSignature.originalSigners(clone));
+        PackageInfo messenger = new PackageInfo();
+        messenger.packageName = "com.facebook.orca";
+        assertNull(MessengerSignature.originalSigners(messenger));
+    }
+
+    @Test public void theOwnPackageComesFromTheProcessName() {
+        String own = RuntimeEnvironment.getApplication().getPackageName();
+        assertEquals(own, android.app.Application.getProcessName());
+        assertEquals(own, MessengerSignature.ownPackage());
+        assertEquals(own, MessengerSignature.ownPackage);
+        PackageInfo self = new PackageInfo();
+        self.packageName = own;
+        assertNotNull(MessengerSignature.originalSigners(self));
+        PackageInfo messenger = new PackageInfo();
+        messenger.packageName = MessengerSignature.PACKAGE;
+        assertNull(MessengerSignature.originalSigners(messenger));
     }
 
     @Test public void sameKeyFacebookCallingMessengerIsAnsweredAsMetaSigned() throws Exception {
@@ -158,7 +183,9 @@ public class MessengerSignatureTest {
     }
 
     @Test public void aBuildStillCarryingMetasKeyStepsAside() throws Exception {
+        MessengerSignature.ownPackage = "com.facebook.orca";
         Signature meta = MessengerSignature.originalSigners(namedMessenger()).get(0);
+        MessengerSignature.ownPackage = null;
         install(RuntimeEnvironment.getApplication().getPackageName(), Process.myUid(), meta);
         PackageInfo facebook = callingFacebook(meta);
         assertNull(MessengerSignature.originalSigners(facebook));
@@ -170,6 +197,23 @@ public class MessengerSignatureTest {
         packages.removePackage(MessengerSignature.FACEBOOK);
         assertNull(MessengerSignature.originalSigners(facebook));
         assertEquals(1, count(MessengerSignature.ERROR));
+    }
+
+    /** FBNS hashes this build's one signer: it gets the original certificate, every other package keeps the system's array. */
+    @Test public void fbnsReadsTheOriginalCertificateForThisBuildOnly() throws Exception {
+        MessengerSignature.ownPackage = "com.facebook.orca.hush";
+        Signature[] reported = {MANAGER_KEY};
+        PackageInfo self = new PackageInfo();
+        self.packageName = "com.facebook.orca.hush";
+        Signature[] own = MessengerSignature.fbnsSigners(self, reported);
+        assertMetaCertificate(java.util.Arrays.asList(own));
+        assertSame("the system's array is left as it was", MANAGER_KEY, reported[0]);
+
+        assertSame(reported, MessengerSignature.fbnsSigners(namedMessenger(), reported));
+        assertSame(reported, MessengerSignature.fbnsSigners(callingFacebook(MANAGER_KEY), reported));
+        assertSame(reported, MessengerSignature.fbnsSigners(null, reported));
+        assertNull(MessengerSignature.fbnsSigners(namedMessenger(), null));
+        for (int i = 0; i < MessengerSignature.CALLER_OUTCOMES.length; i++) assertEquals(0, MessengerSignature.callerCounts.get(i));
     }
 
     @Test public void currentSignersLeaveOutRotationHistory() throws Exception {

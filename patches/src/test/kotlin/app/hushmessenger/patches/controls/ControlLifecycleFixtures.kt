@@ -1,7 +1,7 @@
 package app.hushmessenger.patches.controls
 
 import app.morphe.patcher.Patcher
-import app.morphe.patcher.patch.BytecodePatch
+import app.morphe.patcher.patch.Patch
 import app.morphe.patcher.patch.PatchResult
 import com.android.tools.smali.dexlib2.Opcodes
 import com.android.tools.smali.dexlib2.iface.ClassDef
@@ -72,9 +72,9 @@ internal fun lifecycleClasses(brokenMenu: Boolean = false, brokenPeople: Boolean
             return v0
         """.trimIndent(), flags = 9))),
     )
-    return (legacyDrawerFixture(BASE_PROFILE, if (brokenMenu) "bind" else "none").classes +
+    return (legacyDrawerFixture(SYNTHETIC_PROFILE, if (brokenMenu) "bind" else "none").classes +
         peopleMethods.groupBy { it.definingClass }.map { (type, methods) -> fixtureClass(type, methods) } +
-        peopleJewelKeyHolder() + theme).filterNot { it.type.startsWith("Lapp/hushmessenger/extension/") }
+        peopleJewelKeyHolder() + inboxRefreshClasses() + theme).filterNot { it.type.startsWith("Lapp/hushmessenger/extension/") }
 }
 
 /** ARSCLib is provided at runtime by the pinned patcher, so keep it out of the bundle's compile graph. */
@@ -85,7 +85,12 @@ private fun fixtureCall(target: Any, name: String, vararg arguments: Any): Any? 
     }
 }.invoke(target, *arguments)
 
-internal fun lifecycleApk(directory: Path, classes: List<ClassDef>): File {
+/** The supported build number the lifecycle manifest claims. Its classes follow the synthetic mapping instead. */
+internal const val LIFECYCLE_VERSION_CODE = 347415354
+
+internal fun lifecycleApk(directory: Path, classes: List<ClassDef>, manifestExtra: String = "", applicationExtra: String = ""): File {
+    // Patching reads the profile by the manifest's version code, and these classes carry the synthetic names.
+    controlProfilesInUse = mapOf(LIFECYCLE_VERSION_CODE to SYNTHETIC_PROFILE)
     Files.createDirectories(directory)
     val resourceFixture = Path.of("../extensions/messenger/build/intermediates/linked_resources_binary_format/release/" +
         "processReleaseResources/linked-resources-binary-format-release.ap_").toFile()
@@ -108,10 +113,12 @@ internal fun lifecycleApk(directory: Path, classes: List<ClassDef>): File {
         fixtureCall(manifest, "setPackageBlock", pkg)
         fixtureCall(manifest, "parse", parser.invoke(null, StringReader("""
             <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.facebook.orca"
-                android:versionCode="346013440" android:versionName="580.0.0.49.91">
+                android:versionCode="$LIFECYCLE_VERSION_CODE" android:versionName="587.0.0.54.96">
               <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="36"/>
+              $manifestExtra
               <application android:appComponentFactory="$APP_COMPONENT_FACTORY">
                 <activity android:name="stock.Main"/>
+                $applicationExtra
                 <activity android:name="$SCREEN_HOST" android:exported="false"
                     android:parentActivityName="com.facebook.messenger.neue.MainActivity">
                   <meta-data android:name="android.support.PARENT_ACTIVITY" android:value="com.facebook.messenger.neue.MainActivity"/>
@@ -132,6 +139,9 @@ internal fun lifecycleApk(directory: Path, classes: List<ClassDef>): File {
         fixtureCall(shortcuts, "setPackageBlock", pkg)
         fixtureCall(shortcuts, "parse", parser.invoke(null, StringReader("""
             <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+              <shortcut android:shortcutId="stock_compose">
+                <intent android:action="android.intent.action.VIEW" android:targetPackage="com.facebook.orca" android:targetClass="stock.Main"/>
+              </shortcut>
               <share-target android:targetClass="com.facebook.messenger.intents.ShareIntentHandler">
                 <category android:name="stock.share"/><data android:mimeType="*/*"/>
               </share-target>
@@ -177,7 +187,8 @@ internal fun lifecycleManifest(apk: File): Document {
 
 /** Count the real extension stream, restoring the singleton provider even when an assertion fails. */
 internal fun <T> withLifecycleExtension(bytes: ByteArray, action: (() -> Int) -> T): T {
-    val field = BytecodePatch::class.java.getDeclaredField("extensionStreamProviders").apply { isAccessible = true }
+    // Patcher 2.3.0 moved the providers from BytecodePatch up to Patch, and getDeclaredField skips superclasses.
+    val field = Patch::class.java.getDeclaredField("extensionStreamProviders").apply { isAccessible = true }
     val original = field.get(settingsExtension)
     var reads = 0
     val provider = Supplier { listOf(Supplier { reads++; ByteArrayInputStream(bytes) }) }
@@ -204,7 +215,9 @@ internal fun collectLifecycle(patcher: Patcher): List<PatchResult> {
             else -> error("Unexpected collector method ${method.name}")
         }
     }
-    val flow = Patcher::class.java.getMethod("invoke").invoke(patcher)
+    // Patcher 2.2 takes a callback run as each patch starts; the lifecycle tests read only the results.
+    val onPatchStart: (Any?) -> Unit = {}
+    val flow = Patcher::class.java.getMethod("invoke", Function1::class.java).invoke(patcher, onPatchStart)
     val outcome = Class.forName("kotlinx.coroutines.flow.Flow")
         .getMethod("collect", collectorType, Continuation::class.java).invoke(flow, collector, continuation)
     if (outcome === COROUTINE_SUSPENDED) {

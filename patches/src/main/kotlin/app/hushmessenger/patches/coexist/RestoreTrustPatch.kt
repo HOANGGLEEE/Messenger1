@@ -5,22 +5,50 @@
 package app.hushmessenger.patches.coexist
 
 import app.hushmessenger.patches.MessengerTarget
+import app.hushmessenger.patches.controls.hookId
+import app.hushmessenger.patches.controls.jumpTargets
 import app.hushmessenger.patches.controls.settingsExtension
 import app.morphe.patcher.Fingerprint
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
 import app.morphe.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
 import app.morphe.patcher.extensions.InstructionExtensions.getInstruction
 import app.morphe.patcher.fieldAccess
 import app.morphe.patcher.methodCall
 import app.morphe.patcher.patch.PatchException
 import app.morphe.patcher.patch.bytecodePatch
+import app.morphe.patcher.string
 import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod
 import app.morphe.patcher.util.smali.ExternalLabel
 import com.android.tools.smali.dexlib2.AccessFlags
+import com.android.tools.smali.dexlib2.Opcode
+import com.android.tools.smali.dexlib2.iface.ClassDef
+import com.android.tools.smali.dexlib2.iface.Method
+import com.android.tools.smali.dexlib2.iface.instruction.FiveRegisterInstruction
+import com.android.tools.smali.dexlib2.iface.instruction.Instruction
+import com.android.tools.smali.dexlib2.iface.instruction.NarrowLiteralInstruction
+import com.android.tools.smali.dexlib2.iface.instruction.OffsetInstruction
+import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
+import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
+import com.android.tools.smali.dexlib2.iface.instruction.SwitchPayload
+import com.android.tools.smali.dexlib2.iface.instruction.TwoRegisterInstruction
+import com.android.tools.smali.dexlib2.iface.reference.FieldReference
+import com.android.tools.smali.dexlib2.iface.reference.MethodReference
+import com.android.tools.smali.dexlib2.iface.reference.StringReference
 
 private const val PACKAGE_INFO = "Landroid/content/pm/PackageInfo;"
 
 private const val ORIGINAL_SIGNERS = "Lapp/hushmessenger/extension/MessengerSignature;->" +
     "originalSigners(Landroid/content/pm/PackageInfo;)Ljava/util/List;"
+
+internal const val FBNS_SIGNERS = "Lapp/hushmessenger/extension/MessengerSignature;->" +
+    "fbnsSigners(Landroid/content/pm/PackageInfo;[Landroid/content/pm/Signature;)[Landroid/content/pm/Signature;"
+
+internal const val FAMILY_LINK_LAUNCHED = "Lapp/hushmessenger/extension/FamilyLinks;->" +
+    "launched(ZLandroid/content/Context;Landroid/content/Intent;)V"
+
+private const val CONTEXT = "Landroid/content/Context;"
+private const val INTENT = "Landroid/content/Intent;"
+private const val URI = "Landroid/net/Uri;"
 
 /**
  * Messenger's trust checks read the signers of a package through a method that prefers the
@@ -46,11 +74,48 @@ internal object PackageSignersFingerprint : Fingerprint(
     ),
 )
 
+/**
+ * FBNS's check of a package it may hand pushes to: the SHA-256 of the package's one signer, looked
+ * up in Meta's certificates. It reads `PackageInfo.signatures` itself and logs as PackageInfoUtil.
+ * Its class and its name are Redex names.
+ */
+internal object FbnsPackageCheckFingerprint : Fingerprint(
+    returnType = "V",
+    filters = listOf(
+        fieldAccess(
+            definingClass = "Landroid/content/pm/PackageInfo;",
+            name = "signatures",
+        ),
+        string("PackageInfoUtil"),
+        string("Failed to create SHA-256 hash"),
+    ),
+)
+
+internal const val THREADS_LINK_TAG = "ThreadsLinkLauncher"
+internal const val INSTAGRAM_LINK_TAG = "InstagramLinkLauncher"
+
+/**
+ * Messenger's Threads and Instagram link launchers: each takes the tapped link, builds a view intent
+ * for its app and hands it to Meta's family launcher, logging under its own tag when that throws.
+ * The app's package is checked apart from the fingerprint ([requireLinkPackage]), which needs it
+ * loaded before the tag.
+ */
+internal object ThreadsLinkLauncherFingerprint : Fingerprint(
+    returnType = "V",
+    parameters = listOf(CONTEXT, URI),
+    filters = listOf(string(THREADS_LINK_TAG)),
+)
+
+internal object InstagramLinkLauncherFingerprint : Fingerprint(
+    returnType = "V",
+    parameters = listOf(CONTEXT, URI),
+    filters = listOf(string(INSTAGRAM_LINK_TAG)),
+)
+
 @Suppress("unused")
 val restoreTrustPatch = bytecodePatch(
     name = "Restore screens on re-signed builds",
-    description = "Answers Messenger's own signer lookup, and a Facebook signed with your key calling Messenger, " +
-        "with the original Meta certificate. Always on.",
+    description = "Patching and signing Messenger yourself can break some of its screens. This makes Messenger's signature check pass again, including for a Facebook you patched with the same key, and lets Threads and Instagram video links open in a Threads or Instagram you patched yourself. Works as soon as you patch it in, with no switch.",
     default = true,
 ) {
     category("Fixes")
@@ -61,9 +126,10 @@ val restoreTrustPatch = bytecodePatch(
         val method = PackageSignersFingerprint.method
         val owner = mutableClassDefBy(method.definingClass)
 
-        val packageInfoFields = owner.fields.filter { it.type == PACKAGE_INFO }
+        // The hook reads the field off `this` with iget-object, so it has to be an instance field.
+        val packageInfoFields = owner.fields.filter { it.type == PACKAGE_INFO && !AccessFlags.STATIC.isSet(it.accessFlags) }
         check(packageInfoFields.size == 1) {
-            "Expected 1 PackageInfo field on ${method.definingClass}, found ${packageInfoFields.size}"
+            "Expected 1 PackageInfo instance field on ${method.definingClass}, found ${packageInfoFields.size}"
         }
         val packageInfo = packageInfoFields.single().name
 
@@ -74,7 +140,152 @@ val restoreTrustPatch = bytecodePatch(
         }
         check(constructor != null) { "$signers has no (List, boolean, boolean) constructor" }
 
-        method.answerOriginalSigners(packageInfo, signers)
+        val threads = ThreadsLinkLauncherFingerprint.method
+        val instagram = InstagramLinkLauncherFingerprint.method
+        threads.requireLinkPackage("Threads", "com.instagram.barcelona", THREADS_LINK_TAG) { classDefByOrNull(it) }
+        instagram.requireLinkPackage("Instagram", "com.instagram.android", INSTAGRAM_LINK_TAG) { classDefByOrNull(it) }
+        // Both launchers are checked before either changes.
+        val sites = listOf(threads.linkLaunchSites("Threads"), instagram.linkLaunchSites("Instagram"))
+
+        method.restoreSigners(packageInfo, signers, FbnsPackageCheckFingerprint.method)
+        threads.reportLinkLaunches(sites[0])
+        instagram.reportLinkLaunches(sites[1])
+    }
+}
+
+/**
+ * Stops the patch unless the launcher loads [pkg] before its [tag]: as a literal, or as the answer of a Redex string pool
+ * looked up by a constant key straight ahead of it ([classOf] finds the pool). 586's armv7 Threads launcher takes its
+ * package from a pool.
+ */
+internal fun Method.requireLinkPackage(app: String, pkg: String, tag: String, classOf: (String) -> ClassDef? = { null }) {
+    val code = implementation?.instructions?.toList().orEmpty()
+    val targets = jumpTargets()
+    fun literal(at: Int, value: String) = ((code[at] as? ReferenceInstruction)?.reference as? StringReference)?.string == value
+    fun pooled(at: Int): Boolean {
+        val lookup = code.getOrNull(at - 1) as? FiveRegisterInstruction ?: return false
+        val pool = (lookup as? ReferenceInstruction)?.reference as? MethodReference ?: return false
+        if (code[at].opcode != Opcode.MOVE_RESULT_OBJECT || lookup.opcode != Opcode.INVOKE_STATIC || lookup.registerCount != 1) return false
+        val key = code.getOrNull(at - 2) as? NarrowLiteralInstruction ?: return false
+        if (code[at - 2].opcode !in LINK_POOL_KEYS || (key as OneRegisterInstruction).registerA != lookup.registerC ||
+            at - 1 in targets || at in targets) return false
+        val method = classOf(pool.definingClass)?.methods?.singleOrNull { it.hookId() == pool.toString() } ?: return false
+        return poolString(method, key.narrowLiteral) == pkg
+    }
+    val named = code.indices.firstOrNull { literal(it, pkg) || pooled(it) } ?: -1
+    val tagged = code.indices.firstOrNull { literal(it, tag) } ?: -1
+    if (named < 0 || named > tagged) throw PatchException("Restore screens on re-signed builds: $app's link launcher doesn't load $pkg before its tag")
+}
+
+private val LINK_POOL_KEYS = setOf(Opcode.CONST_4, Opcode.CONST_16, Opcode.CONST, Opcode.CONST_HIGH16)
+
+/**
+ * What a Redex string pool answers for [key]: [pool] is a static `(I)String` method whose first instruction switches on
+ * its argument, and the case for [key] loads a constant and returns it. Null for any other method or case.
+ */
+internal fun poolString(pool: Method, key: Int): String? {
+    val registers = pool.implementation?.registerCount ?: return null
+    if (!AccessFlags.STATIC.isSet(pool.accessFlags) || pool.returnType != "Ljava/lang/String;" ||
+        pool.parameterTypes.map { it.toString() } != listOf("I")) return null
+    val code = pool.implementation!!.instructions.toList()
+    val switch = code.firstOrNull()?.takeIf { it.opcode == Opcode.PACKED_SWITCH || it.opcode == Opcode.SPARSE_SWITCH } ?: return null
+    if ((switch as OneRegisterInstruction).registerA != registers - 1) return null
+    val addresses = code.runningFold(0) { address, instruction -> address + instruction.codeUnits }
+    val indexAt = code.indices.associateBy { addresses[it] }
+    val payload = indexAt[(switch as OffsetInstruction).codeOffset]?.let(code::get) as? SwitchPayload ?: return null
+    val at = payload.switchElements.singleOrNull { it.key == key }?.let { indexAt[it.offset] } ?: return null
+    val load = code[at]
+    val back = code.getOrNull(at + 1) as? OneRegisterInstruction ?: return null
+    if ((load.opcode != Opcode.CONST_STRING && load.opcode != Opcode.CONST_STRING_JUMBO) || code[at + 1].opcode != Opcode.RETURN_OBJECT ||
+        back.registerA != (load as OneRegisterInstruction).registerA) return null
+    return ((load as ReferenceInstruction).reference as StringReference).string
+}
+
+/** Where a link launcher hands its intent to the family launcher, and the three registers of that call. */
+internal class LinkLaunchSite(val index: Int, val launcher: Int, val context: Int, val intent: Int)
+
+/**
+ * The calls in a Threads or Instagram link launcher that hand the view intent to Meta's family
+ * launcher: instance `(Context, Intent)Z` calls whose answer is dropped by the return-void straight
+ * after each. Since 584 Instagram's has two, one for when an Instagram is installed and one for
+ * when none is. The context is the launcher's own Context parameter and the intent is the one the
+ * method built from the link with a static `(Uri)Intent` call, not written again before a launch,
+ * and nothing after a launch jumps back to it. The launcher
+ * register is dead after the call, so it can take the answer. `invoke-static` names 4-bit
+ * registers, so all three must be v15 or lower. Anything else stops the patch before any edit.
+ */
+internal fun MutableMethod.linkLaunchSites(app: String): List<LinkLaunchSite> {
+    fun refuse(why: String): Nothing = throw PatchException("Restore screens on re-signed builds: $app's link launcher $why")
+    if (AccessFlags.STATIC.isSet(accessFlags)) refuse("is static")
+    val code = implementation!!.instructions.toList()
+    fun Instruction.method() = ((this as? ReferenceInstruction)?.reference as? MethodReference)
+    val launches = code.withIndex().filter { (_, instruction) ->
+        instruction.opcode == Opcode.INVOKE_VIRTUAL && instruction.method()?.let {
+            it.returnType == "Z" && it.parameterTypes.map(CharSequence::toString) == listOf(CONTEXT, INTENT)
+        } == true
+    }
+    if (launches.isEmpty()) refuse("has no launches")
+    val builds = code.withIndex().filter { (_, instruction) ->
+        instruction.opcode == Opcode.INVOKE_STATIC && instruction.method()?.let {
+            it.returnType == INTENT && it.parameterTypes.map(CharSequence::toString) == listOf(URI)
+        } == true
+    }
+    val build = builds.singleOrNull()?.index ?: refuse("builds ${builds.size} intents from its link, expected 1")
+    val targets = jumpTargets()
+    return launches.map { (index, launch) ->
+        if (code.getOrNull(index + 1)?.opcode != Opcode.RETURN_VOID) refuse("uses its launch's answer")
+        if (index + 1 in targets) refuse("jumps to the return after its launch")
+        val call = launch as FiveRegisterInstruction
+        val site = LinkLaunchSite(index, call.registerC, call.registerD, call.registerE)
+        if (setOf(site.launcher, site.context, site.intent).size != 3 || maxOf(site.launcher, site.context, site.intent) > 15) {
+            refuse("launches with v${site.launcher}, v${site.context} and v${site.intent}, which the call can't name")
+        }
+        if (site.context != implementation!!.registerCount - 2) refuse("launches with a Context other than its own")
+        val result = code.getOrNull(build + 1)
+        if (build > index || result?.opcode != Opcode.MOVE_RESULT_OBJECT || (result as OneRegisterInstruction).registerA != site.intent) {
+            refuse("launches an intent other than the one it built from the link")
+        }
+        // The catch block after the return reuses the register for its log message, which can't reach the launch.
+        val rewrites = (build + 2 until index).count { i ->
+            code[i].opcode.setsRegister() && (code[i] as? OneRegisterInstruction)?.registerA == site.intent
+        }
+        if (rewrites != 0) refuse("writes its intent's register again before its launch")
+        if (backJumps(code, index)) refuse("jumps back to its launch from after it")
+        site
+    }
+}
+
+/** Whether a branch or switch case after [index] lands at or before it. */
+private fun backJumps(code: List<Instruction>, index: Int): Boolean {
+    val addresses = IntArray(code.size + 1)
+    for (i in code.indices) addresses[i + 1] = addresses[i] + code[i].codeUnits
+    val indexAt = code.indices.associateBy { addresses[it] }
+    return (index + 1 until code.size).any { i ->
+        val jump = code[i] as? OffsetInstruction ?: return@any false
+        val landing = addresses[i] + jump.codeOffset
+        val cases = if (jump.opcode == Opcode.PACKED_SWITCH || jump.opcode == Opcode.SPARSE_SWITCH) {
+            // Case offsets count from the switch instruction, not from its payload.
+            (indexAt[landing]?.let(code::get) as? SwitchPayload)?.switchElements?.map { addresses[i] + it.offset }.orEmpty()
+        } else {
+            listOf(landing)
+        }
+        cases.any { it <= addresses[index] }
+    }
+}
+
+/**
+ * Hands each family launch's dropped answer, with the context and intent it got, to the extension.
+ * The last site goes first so the earlier indices still point at their launches.
+ */
+internal fun MutableMethod.reportLinkLaunches(sites: List<LinkLaunchSite>) {
+    for (site in sites.sortedByDescending { it.index }) {
+        addInstructions(
+            site.index + 1,
+            """
+                move-result v${site.launcher}
+                invoke-static { v${site.launcher}, v${site.context}, v${site.intent} }, $FAMILY_LINK_LAUNCHED
+            """,
+        )
     }
 }
 
@@ -90,9 +301,12 @@ val restoreTrustPatch = bytecodePatch(
  * compiler leaves out an instruction whose register doesn't fit, without a word.
  */
 internal fun MutableMethod.answerOriginalSigners(packageInfo: String, signers: String) {
-    val self = if (AccessFlags.STATIC.isSet(accessFlags)) 0 else 1
+    // The smali below copies p0 as `this`, which a static method doesn't have.
+    if (AccessFlags.STATIC.isSet(accessFlags)) throw PatchException(
+        "Restore screens on re-signed builds: $definingClass->$name is static, expected an instance method"
+    )
     val paramWidth = parameterTypes.sumOf { if (it == "J" || it == "D") 2 else 1 }
-    val locals = implementation!!.registerCount - self - paramWidth
+    val locals = implementation!!.registerCount - 1 - paramWidth
     if (locals < 3) throw PatchException(
         "Restore screens on re-signed builds: $definingClass->$name has $locals local register(s), needs 3"
     )
@@ -111,4 +325,59 @@ internal fun MutableMethod.answerOriginalSigners(packageInfo: String, signers: S
         """,
         ExternalLabel("original", getInstruction(0)),
     )
+}
+
+/**
+ * FBNS, the push service Meta's apps share, checks each package it may hand pushes to against
+ * Meta's certificates, reading `PackageInfo.signatures` itself. On a re-signed build Messenger
+ * fails its own check. The array that read gives goes through the extension, which answers the
+ * original certificate for this build and the system's answer for any other package.
+ *
+ * The call goes straight after the read and names its two registers. `invoke-static` takes 4-bit
+ * registers, so both must be v15 or lower, and the read must not overwrite the package it read
+ * from, which the call still needs. A jump landing straight after the read would skip the call.
+ */
+internal fun MutableMethod.routeFbnsSigners(read: FbnsSignersRead = fbnsSignersRead()) {
+    addInstructions(
+        read.index + 1,
+        """
+            invoke-static { v${read.info}, v${read.signatures} }, $FBNS_SIGNERS
+            move-result-object v${read.signatures}
+        """,
+    )
+}
+
+/** Where FBNS's package check reads the signers, and the package and array registers the call names. */
+internal class FbnsSignersRead(val index: Int, val info: Int, val signatures: Int)
+
+/** The one place [routeFbnsSigners] can go, or a refusal. Changes nothing. */
+internal fun Method.fbnsSignersRead(): FbnsSignersRead {
+    val code = implementation!!.instructions.toList()
+    val reads = code.withIndex().filter { (_, instruction) ->
+        instruction.opcode == Opcode.IGET_OBJECT &&
+            ((instruction as ReferenceInstruction).reference as FieldReference).let {
+                it.definingClass == PACKAGE_INFO && it.name == "signatures"
+            }
+    }
+    val (index, read) = reads.singleOrNull()
+        ?: throw PatchException("Restore screens on re-signed builds: expected one read of PackageInfo.signatures in FBNS's package check, found ${reads.size}")
+    val signatures = (read as TwoRegisterInstruction).registerA
+    val info = read.registerB
+    if (signatures == info || signatures > 15 || info > 15) throw PatchException(
+        "Restore screens on re-signed builds: FBNS's package check reads signatures into v$signatures from v$info, which the call can't name"
+    )
+    if (index + 1 in jumpTargets()) throw PatchException(
+        "Restore screens on re-signed builds: FBNS's package check jumps past its signatures read"
+    )
+    return FbnsSignersRead(index, info, signatures)
+}
+
+/**
+ * Answers the original signers here and routes [fbns]'s signers read. FBNS's read is found first,
+ * so a check that refuses either one leaves both methods as Messenger wrote them.
+ */
+internal fun MutableMethod.restoreSigners(packageInfo: String, signers: String, fbns: MutableMethod) {
+    val read = fbns.fbnsSignersRead()
+    answerOriginalSigners(packageInfo, signers)
+    fbns.routeFbnsSigners(read)
 }

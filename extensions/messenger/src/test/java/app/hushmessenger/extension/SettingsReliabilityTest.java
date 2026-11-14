@@ -37,6 +37,7 @@ public class SettingsReliabilityTest {
     @Before public void reset() {
         Settings.initialize(RuntimeEnvironment.getApplication());
         Settings.preferences.edit().clear().commit();
+        OpenSections.all();
     }
 
     @Test @Config(sdk = {28, 36}) public void wholeControlRowIsOneAccessibleSwitchWithLiveState() {
@@ -84,6 +85,88 @@ public class SettingsReliabilityTest {
         }
     }
 
+    @Test @Config(sdk = {28, 36}) public void appDescriptionsKeepOneAccessibleSwitchAtLargeTextAndInRtl() {
+        for (String locale : new String[] {"en-rUS", "ar-rXB"}) {
+            RuntimeEnvironment.setQualifiers(locale + "-w320dp-h360dp-mdpi");
+            RuntimeEnvironment.setFontScale(2f);
+            try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+                View root = layout(screen.get(), 320, 360);
+                root.findViewWithTag("tab_app").performClick();
+                layout(screen.get(), 320, 360);
+                for (String key : new String[] {"light", "material_you_black", "check_updates"}) {
+                    Switch choice = root.findViewWithTag(key);
+                    assertReachable(screen.get(), choice, 320, 360);
+                    ViewGroup row = (ViewGroup) choice.getParent();
+                    AccessibilityNodeInfo node = row.createAccessibilityNodeInfo();
+                    assertEquals("android.widget.Switch", node.getClassName().toString());
+                    assertEquals(choice.getContentDescription(), node.getContentDescription());
+                    assertEquals(0, node.getChildCount());
+                    assertTrue(key + " fits horizontally", choice.getLeft() >= 0 && choice.getRight() <= row.getWidth());
+                    ViewGroup labels = (ViewGroup) row.getChildAt(0);
+                    TextView description = (TextView) labels.getChildAt(1);
+                    assertEquals(0, description.getLayout().getEllipsisCount(description.getLineCount() - 1));
+                    assertEquals(description.getLayout().getHeight(), description.getHeight());
+                    node.recycle();
+                }
+            }
+        }
+    }
+
+    /**
+     * At normal size an App row's description runs the panel's full width under the switch's 48dp box. The box is
+     * invisible, so the check is that no description line overlaps the drawn track, and a line level with it stays 4dp
+     * clear sideways. Arabic checks the mirrored row. The pseudo-locales get the large-text layout, so they can't.
+     */
+    @Test @Config(sdk = {28, 36})
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    public void normalSizeAppDescriptionsStayClearOfTheSwitchTrack() {
+        // English stays left to right, so the mirrored rows need an Arabic table.
+        SettingsTranslations.LOCALES.put("ar", java.util.Map.of("tab_controls", "Controls in Arabic"));
+        try {
+            normalSizeAppDescriptionsStayClearOfTheSwitchTrackIn();
+        } finally { SettingsTranslations.LOCALES.remove("ar"); }
+    }
+
+    private void normalSizeAppDescriptionsStayClearOfTheSwitchTrackIn() {
+        for (String locale : new String[] {"en-rUS-ldltr", "ar-rEG-ldrtl"}) {
+            RuntimeEnvironment.setQualifiers(locale + "-w390dp-h844dp-mdpi");
+            RuntimeEnvironment.setFontScale(1f);
+            try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+                View root = layout(screen.get(), 390, 844);
+                root.findViewWithTag("tab_app").performClick();
+                layout(screen.get(), 390, 844);
+                int rows = 0;
+                for (String key : new String[] {"hide_drawer_icon", "hide_menu_row", "light", "material_you_black", "check_updates"}) {
+                    Switch choice = root.findViewWithTag(key);
+                    if (choice == null) continue;
+                    rows++;
+                    ViewGroup row = (ViewGroup) choice.getParent();
+                    ViewGroup labels = (ViewGroup) row.getChildAt(0);
+                    TextView description = (TextView) labels.getChildAt(1);
+                    assertEquals(key + " uses the normal-size overlay", -48, ((ViewGroup.MarginLayoutParams) choice.getLayoutParams()).getMarginStart());
+                    assertEquals(locale + " row direction", locale.endsWith("ldrtl") ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR,
+                        row.getLayoutDirection());
+                    // Drawing is what gives the track its bounds inside the switch.
+                    choice.draw(new android.graphics.Canvas(android.graphics.Bitmap.createBitmap(choice.getWidth(), choice.getHeight(),
+                        android.graphics.Bitmap.Config.ARGB_8888)));
+                    Rect track = new Rect(choice.getTrackDrawable().getBounds());
+                    assertFalse(key + " track drawn", track.isEmpty());
+                    track.offset(choice.getLeft(), choice.getTop());
+                    android.text.Layout text = description.getLayout();
+                    int x = labels.getLeft() + description.getLeft() + description.getTotalPaddingLeft();
+                    int y = labels.getTop() + description.getTop() + description.getTotalPaddingTop();
+                    for (int line = 0; line < text.getLineCount(); line++) {
+                        Rect drawn = new Rect(x + (int) Math.floor(text.getLineLeft(line)) - 4, y + text.getLineTop(line),
+                            x + (int) Math.ceil(text.getLineRight(line)) + 4, y + text.getLineBottom(line));
+                        assertFalse(locale + " " + key + " line " + line + " " + drawn + " meets the track " + track,
+                            Rect.intersects(drawn, track));
+                    }
+                }
+                assertTrue(locale + " checked the App rows", rows >= 2);
+            }
+        }
+    }
+
     @Test @Config(sdk = 28) public void unavailableRowIsAnnouncedButCannotToggle() {
         try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
             Switch choice = screen.get().getWindow().getDecorView().findViewWithTag("bubbles");
@@ -123,8 +206,8 @@ public class SettingsReliabilityTest {
                     if ("failed".equals(state)) Settings.hookErrors.put("people", "java.lang.IllegalStateException at Settings.test|" + (now + 1));
                     if ("paused".equals(state)) Settings.preferences.edit().putBoolean("paused", true).commit();
                     screen.resume();
-                    String expected = "paused".equals(state) ? "Changes paused" : "failed".equals(state) ? "Stopped with an error just now"
-                        : "used".equals(state) ? "Used just now" : "Nothing to change yet since restart";
+                    String expected = "paused".equals(state) ? "Changes paused" : "failed".equals(state) ? "Stopped with an error just now. Copy setup on the App tab has details."
+                        : "used".equals(state) ? "Used just now" : "On. Waiting for Messenger to use it";
                     assertSame(choice, root.findViewWithTag("people"));
                     assertSame(label, root.findViewWithTag("active_people"));
                     assertEquals(expected, label.getText().toString());
@@ -215,14 +298,59 @@ public class SettingsReliabilityTest {
         }
     }
 
+    @Test @Config(sdk = {28, 36}, qualifiers = "mdpi")
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    public void aFocusedAccentButtonsRingStandsOutFromTheButtonAndThePage() {
+        for (boolean light : new boolean[] {false, true}) {
+            SettingsUi ui = new SettingsUi(RuntimeEnvironment.getApplication(), light);
+            // The primary buttons and the selected tab are both accent fills.
+            for (android.graphics.drawable.Drawable background : new android.graphics.drawable.Drawable[] {
+                    ui.primaryButton("Save").getBackground(), ui.interactive(ui.accentFill, 0, 10)}) {
+                int[] focused = edge(ui, background, true), plain = edge(ui, background, false);
+                String theme = light ? "light" : "dark";
+                assertTrue(theme + " outer ring against the page", contrast(focused[0], ui.background) >= 3);
+                assertTrue(theme + " inner ring against the fill", contrast(focused[1], focused[2]) >= 3);
+                assertTrue(theme + " ring against the unfocused button", contrast(focused[1], plain[1]) >= 3);
+            }
+        }
+    }
+
+    /** The outer ring, inner ring and fill pixels on a background's left edge, drawn over the page at 1px per dp. */
+    private static int[] edge(SettingsUi ui, android.graphics.drawable.Drawable background, boolean focused) {
+        android.graphics.Bitmap pixels = android.graphics.Bitmap.createBitmap(120, 60, android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas canvas = new android.graphics.Canvas(pixels);
+        canvas.drawColor(ui.background);
+        background.setBounds(10, 10, 110, 50);
+        background.setState(focused ? new int[] {android.R.attr.state_enabled, android.R.attr.state_focused}
+            : new int[] {android.R.attr.state_enabled});
+        background.jumpToCurrentState();
+        background.draw(canvas);
+        int[] edge = {pixels.getPixel(10, 30), pixels.getPixel(12, 30), pixels.getPixel(20, 30)};
+        pixels.recycle();
+        return edge;
+    }
+
+    private static double contrast(int first, int second) {
+        double[] luminance = new double[2], weights = {0.2126, 0.7152, 0.0722};
+        int[] colors = {first, second};
+        for (int color = 0; color < 2; color++) for (int channel = 0; channel < 3; channel++) {
+            double value = ((colors[color] >>> (16 - 8 * channel)) & 255) / 255.0;
+            luminance[color] += weights[channel] * (value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4));
+        }
+        return (Math.max(luminance[0], luminance[1]) + 0.05) / (Math.min(luminance[0], luminance[1]) + 0.05);
+    }
+
     @Test @Config(sdk = {28, 29}) public void savedUnsupportedBubblesAreNotCountedAsEffective() {
         Settings.preferences.edit().putBoolean("bubbles", true).commit();
         try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
             View root = screen.get().getWindow().getDecorView();
             assertTrue(((Switch) root.findViewWithTag("bubbles")).isChecked());
             assertFalse(root.findViewWithTag("bubbles").isEnabled());
-            // The custom track has no disabled drawable, so the switch itself must look unavailable.
-            assertEquals(0.4f, root.findViewWithTag("bubbles").getAlpha(), 0.001f);
+            Switch unavailable = root.findViewWithTag("bubbles");
+            SettingsUi palette = new SettingsUi(screen.get(), false);
+            assertEquals(1f, unavailable.getAlpha(), 0f);
+            android.graphics.drawable.GradientDrawable track = (android.graphics.drawable.GradientDrawable) unavailable.getTrackDrawable().getCurrent();
+            assertEquals(palette.track, track.getColor().getDefaultColor());
             assertTrue(Settings.preferences.getBoolean("bubbles", false));
             assertFalse(Settings.enableBubbles());
             assertEquals("0 controls enabled", ((TextView) root.findViewWithTag("enabled_count")).getText().toString());
@@ -238,7 +366,7 @@ public class SettingsReliabilityTest {
             assertFalse(Settings.enableBubbles());
             bubbles.performClick();
             Toast first = ShadowToast.getLatestToast();
-            assertEquals("Allow chat bubbles on", ShadowToast.getTextOfLatestToast());
+            assertEquals("Allow chat bubbles is on", ShadowToast.getTextOfLatestToast());
             assertTrue(Settings.enableBubbles());
             assertEquals("1 control enabled", ((TextView) root.findViewWithTag("enabled_count")).getText().toString());
             root.findViewWithTag("paused").performClick();
@@ -345,6 +473,8 @@ public class SettingsReliabilityTest {
         var app = RuntimeEnvironment.getApplication();
         var info = app.getPackageManager().getPackageInfo(app.getPackageName(), android.content.pm.PackageManager.GET_META_DATA);
         info.applicationInfo.metaData.putBoolean("hush.feature.menu_row", true);
+        // The longest card text: the Menu row and the logo both.
+        info.applicationInfo.metaData.putBoolean("hush.feature." + Settings.LOGO_LONG_PRESS, true);
         Shadows.shadowOf(app.getPackageManager()).installPackage(info);
         RuntimeEnvironment.setFontScale(2f);
         // A short window only has to keep every line; a phone-sized one shows the whole card text.
@@ -356,7 +486,7 @@ public class SettingsReliabilityTest {
                 root.findViewWithTag("tab_app").performClick();
                 layout(screen.get(), size[0], size[1]);
                 TextView help = root.findViewWithTag("access_help");
-                assertTrue(help.getText().toString().contains("Menu tab"));
+                assertTrue(help.getText().toString().contains("Messenger's Menu"));
                 assertEquals(0, help.getLayout().getEllipsisCount(help.getLineCount() - 1));
                 assertEquals(help.getLayout().getHeight(), help.getHeight() - help.getPaddingTop() - help.getPaddingBottom());
                 if (size[1] > 360) {
@@ -367,6 +497,65 @@ public class SettingsReliabilityTest {
                 assertReachable(screen.get(), root.findViewWithTag("restart_messenger"), size[0], size[1]);
             }
         }
+    }
+
+    /** Each section's chevron turns a quarter round as it opens, so its box holds the whole glyph either way up. */
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    @Test @Config(sdk = {28, 36}) public void sectionChevronsStayWholeAtLargeText() {
+        RuntimeEnvironment.setQualifiers("w411dp-h891dp-mdpi");
+        RuntimeEnvironment.setFontScale(2f);
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            View root = layout(screen.get(), 411, 891);
+            int checked = 0;
+            for (String tab : new String[] {"tab_controls", "tab_app"}) {
+                root.findViewWithTag(tab).performClick();
+                layout(screen.get(), 411, 891);
+                for (View header : sectionHeaders(root)) {
+                    if (!header.isShown()) continue;
+                    TextView chevron = (TextView) ((ViewGroup) header).getChildAt(2);
+                    float glyph = Math.max(chevron.getPaint().getFontSpacing(),
+                        chevron.getPaint().measureText(chevron.getText().toString()));
+                    // Real text metrics, grown past the old fixed 24dp box (one px a dp here).
+                    assertTrue("glyph " + glyph, glyph > 24f);
+                    assertTrue(header.getTag() + " chevron " + chevron.getWidth() + "x" + chevron.getHeight() + " for " + glyph,
+                        Math.min(chevron.getWidth(), chevron.getHeight()) >= glyph);
+                    checked++;
+                }
+            }
+            assertTrue(checked >= 2);
+        }
+    }
+
+    /** The chevron's glyph mirrors in a right-to-left paragraph, and turned a quarter round it then points up while the section is shut. */
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    @Test @Config(sdk = 36) public void sectionChevronsPointTheSameWayRightToLeft() {
+        RuntimeEnvironment.setQualifiers("en-rUS-w411dp-h891dp-mdpi");
+        RuntimeEnvironment.getApplication().getApplicationInfo().flags |= android.content.pm.ApplicationInfo.FLAG_SUPPORTS_RTL;
+        android.app.LocaleManager manager = RuntimeEnvironment.getApplication().getSystemService(android.app.LocaleManager.class);
+        manager.setApplicationLocales(android.os.LocaleList.forLanguageTags("ar-XB"));
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            View root = layout(screen.get(), 411, 891);
+            root.findViewWithTag("tab_app").performClick();
+            layout(screen.get(), 411, 891);
+            int checked = 0;
+            for (View header : sectionHeaders(root)) {
+                if (!header.isShown()) continue;
+                TextView chevron = (TextView) ((ViewGroup) header).getChildAt(2);
+                assertEquals(View.LAYOUT_DIRECTION_RTL, header.getLayoutDirection());
+                assertFalse(header.getTag() + " chevron drawn mirrored", chevron.getLayout().isRtlCharAt(0));
+                checked++;
+            }
+            assertTrue(checked >= 2);
+        } finally { manager.setApplicationLocales(android.os.LocaleList.getEmptyLocaleList()); }
+    }
+
+    private static java.util.List<View> sectionHeaders(View view) {
+        java.util.List<View> found = new java.util.ArrayList<>();
+        if (view.getTag() instanceof String && ((String) view.getTag()).startsWith("section_")) found.add(view);
+        if (view instanceof ViewGroup)
+            for (int child = 0; child < ((ViewGroup) view).getChildCount(); child++)
+                found.addAll(sectionHeaders(((ViewGroup) view).getChildAt(child)));
+        return found;
     }
 
     @Test @Config(sdk = {28, 36}) public void keyboardSizedWindowKeepsSearchReadableAndRestoresNavigation() {
@@ -460,6 +649,34 @@ public class SettingsReliabilityTest {
         }
     }
 
+    @Test @Config(sdk = {28, 36}) public void phoneKeyboardLeavesTheFirstMatchVisibleUnderSearch() {
+        // A phone-sized window that Samsung's keyboard resizes to a little over half its height.
+        RuntimeEnvironment.setQualifiers("w360dp-h740dp-mdpi");
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            View root = layout(screen.get(), 360, 740);
+            EditText search = root.findViewWithTag("find_control");
+            ScrollView controls = scroll(root.findViewWithTag("controls_page"));
+            assertEquals(0, controls.getScrollY());
+            search.setText("People You May");
+            assertTrue(search.requestFocus());
+            layout(screen.get(), 360, 426);
+            for (int frame = 0; frame < 40; frame++) {
+                Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16));
+                controls.computeScroll();
+            }
+            Rect visible = new Rect();
+            assertTrue(search.getGlobalVisibleRect(visible));
+            assertEquals("Whole search visible above the keyboard", search.getHeight(), visible.height());
+            Rect page = new Rect();
+            assertTrue(controls.getGlobalVisibleRect(page));
+            assertTrue("Search moves up to make room: " + visible + " in " + page, visible.top - page.top < page.height() / 3);
+            View match = root.findViewWithTag("people");
+            assertTrue("The match shows under the search instead of behind the keyboard", match.getGlobalVisibleRect(visible));
+            assertEquals("Whole match visible", match.getHeight(), visible.height());
+            assertTrue(search.hasFocus());
+        }
+    }
+
     @Test @Config(sdk = {29, 36}) public void cutoutInsetsKeepTheScreenClearOnEitherSide() {
         try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
             View content = ((ViewGroup) screen.get().findViewById(android.R.id.content)).getChildAt(0);
@@ -486,6 +703,8 @@ public class SettingsReliabilityTest {
     @Test public void rtlKeepsTheGapBetweenTheSwitchAndItsLabel() {
         RuntimeEnvironment.setQualifiers("ar-rEG-ldrtl-w400dp-h800dp-mdpi");
         RuntimeEnvironment.getApplication().getApplicationInfo().flags |= ApplicationInfo.FLAG_SUPPORTS_RTL;
+        // English stays left to right, so the mirrored rows need an Arabic table.
+        SettingsTranslations.LOCALES.put("ar", java.util.Map.of("tab_controls", "Controls in Arabic"));
         try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
             View root = screen.get().getWindow().getDecorView();
             root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
@@ -493,8 +712,16 @@ public class SettingsReliabilityTest {
             Switch control = root.findViewWithTag("people");
             ViewGroup row = (ViewGroup) control.getParent();
             assertEquals(View.LAYOUT_DIRECTION_RTL, row.getLayoutDirection());
-            assertEquals(12, row.getChildAt(0).getLeft() - control.getRight());
-        }
+            // Descriptions span the row now; the title reserves the switch column.
+            ViewGroup labels = (ViewGroup) row.getChildAt(0);
+            ViewGroup titleLine = (ViewGroup) labels.getChildAt(0);
+            Rect titleBounds = new Rect();
+            titleLine.getChildAt(0).getDrawingRect(titleBounds);
+            row.offsetDescendantRectToMyCoords(titleLine.getChildAt(0), titleBounds);
+            assertTrue("The visible title stays clear of the switch", titleBounds.left - control.getRight() >= 12);
+            // The space kept for the switch sits on its side, so the title starts at the mirrored edge like its description.
+            assertEquals("The title starts at the right edge", labels.getRight() - labels.getPaddingRight(), titleBounds.right);
+        } finally { SettingsTranslations.LOCALES.remove("ar"); }
     }
 
     @Test @Config(sdk = {28, 36}) public void accessiblePageActionsExposeTheActivePaneAndCheckedState() {

@@ -121,7 +121,7 @@ class ChatAnimationTest {
 
     @Test fun discoveryNeedsTheOriginalNamesAndTheNoArgumentConstructors() {
         val classes = hierarchy().values.toList()
-        val found = findControls(classes)
+        val found = mirroredControls(classes)
         assertEquals(listOf(FRAGMENT_ANIMATION), found.getValue("chat_animation").map { it.hookId() })
         assertEquals(listOf("$CHAT-><init>()V"), found.getValue("chat_fragment").map { it.hookId() })
         assertEquals(listOf("$INBOX-><init>()V"), found.getValue("chat_inbox").map { it.hookId() })
@@ -130,14 +130,14 @@ class ChatAnimationTest {
         val renamed = classes.map { cls ->
             if (cls.type in setOf(CHAT, LEGACY)) fixtureClass(cls.type, cls.methods.toList(), "SomethingElse", superclass = SHARED_BASE) else cls
         }
-        val withoutNames = findControls(renamed)
+        val withoutNames = mirroredControls(renamed)
         assertTrue(withoutNames.getValue("chat_fragment").isEmpty())
         assertTrue(withoutNames.getValue("chat_legacy").isEmpty())
         val withArguments = classes.map { cls ->
             if (cls.type != CHAT) cls else fixtureClass(CHAT, listOf(fixtureMethod("$CHAT-><init>(I)V", "return-void")),
                 "MsysThreadViewFragment", superclass = SHARED_BASE)
         }
-        assertTrue(findControls(withArguments).getValue("chat_fragment").isEmpty())
+        assertTrue(mirroredControls(withArguments).getValue("chat_fragment").isEmpty())
     }
 
     @Test fun theChatActivitySlideMatchesTheFragmentSlide() {

@@ -18,8 +18,22 @@ import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
+if __package__:
+    from . import bundle_signature
+    from .build_queue import gradle, time_limit
+    from .readme_captures import check as check_captures
+else:
+    # Run as a script, or loaded by file path from the tests.
+    if str(Path(__file__).resolve().parent) not in sys.path:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import bundle_signature
+    from build_queue import gradle, time_limit
+    from readme_captures import check as check_captures
+
+BUNDLE_PUBLIC_KEY = Path("morphe-signing.pub")
+BUG_REPORT_FORM = Path(".github/ISSUE_TEMPLATE/bug_report.yml")
 RELEASE_SIGNERS = Path("scripts/release_signers")
-RELEASE_SIGNER = "HOANGGLEEE"
+RELEASE_SIGNER = "SysAdminDoc"
 SIGNATURE_NAMESPACE = "hushmessenger-release"
 KEY_TYPES = ("ssh-ed25519", "ssh-rsa", "ecdsa-sha2-")
 CATALOG_TIMEOUT = 600
@@ -42,6 +56,125 @@ def read_json(path):
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_pairs)
 
 
+def changelog_groups(root, version):
+    """The ### groups of the version's CHANGELOG section, with LF line endings.
+
+    Morphe Manager shows the source index description instead of CHANGELOG.md for the release an
+    app was patched with, so a one-paragraph description hid every change of the newest release
+    (Hushfacebook #143, same here). The description is the summary written by hand, then these.
+    """
+    text = (root / "CHANGELOG.md").read_text(encoding="utf-8").replace("\r\n", "\n")
+    section = re.search(
+        rf"^## {re.escape(version)} \([^)\n]*\)\n(.*?)(?=^## |\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    require(section is not None, f"CHANGELOG.md has no section for {version}")
+    groups = re.search(r"^### .*", section.group(1), re.MULTILINE | re.DOTALL)
+    require(
+        groups is not None,
+        f"The {version} CHANGELOG section has no ### groups for the source index description",
+    )
+    return groups.group(0).strip()
+
+
+def describe(root):
+    """Write the project version's CHANGELOG groups after the source index description's summary."""
+    version = re.search(
+        r"^version=(.+)$",
+        (root / "gradle.properties").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    require(version is not None, "Missing project version")
+    version = version[1].strip()
+    groups = changelog_groups(root, version)
+    path = root / "patches-bundle.json"
+    index = read_json(path)
+    require(index.get("version") == version, "Source index version differs from source")
+    # The summary is everything ahead of the groups a previous run wrote.
+    summary = str(index.get("description") or "").split("\n\n### ", 1)[0].rstrip()
+    require(summary.strip(), "Source index description has no summary to keep")
+    index["description"] = f"{summary}\n\n{groups}"
+    with path.open("w", encoding="utf-8", newline="\n") as out:
+        out.write(json.dumps(index, indent=2, ensure_ascii=False) + "\n")
+    return f"Source index description carries the {version} CHANGELOG groups"
+
+
+# morphe-patcher 2.1 loads a bundle's classes on Java 17 and refuses any compiled for a newer one,
+# except under META-INF/versions/, which a multi-release jar keeps for newer runtimes.
+MAX_CLASS_MAJOR = 61
+CLASS_MAGIC = b"\xca\xfe\xba\xbe"
+
+
+def check_class_versions(archive):
+    """Refuse a class the patcher won't load, naming it, so only people on the newer patcher don't find out."""
+    for name in archive.namelist():
+        if not name.endswith(".class") or name.startswith("META-INF/versions/"):
+            continue
+        header = archive.read(name)[:8]
+        require(
+            len(header) == 8 and header[:4] == CLASS_MAGIC,
+            f"{name} isn't a class file",
+        )
+        major = int.from_bytes(header[6:8], "big")
+        require(
+            major <= MAX_CLASS_MAJOR,
+            f"{name} is compiled for class file version {major}; morphe-patcher loads up to"
+            f" {MAX_CLASS_MAJOR} (Java 17)",
+        )
+
+
+# The first Morphe Manager and Desktop releases that bundle each patcher. Manager refuses a bundle
+# whose Patcher-Version is newer than its own patcher, so these are the README's minimum versions.
+PATCHER_CLIENTS = {
+    "2.0.1": ("2.2.0", "1.19.1"),
+    "2.1.0": ("2.3.0", "1.20.0"),
+    "2.2.0": ("2.4.0", "2.0.0"),
+    "2.3.0": ("2.5.0", "2.1.0"),
+}
+
+
+def check_client_minimums(readme, patcher):
+    """Refuse a README that sends people to a Manager or Desktop too old for the bundle's patcher."""
+    require(patcher, "Bundle manifest has no Patcher-Version")
+    require(
+        patcher in PATCHER_CLIENTS,
+        f"Bundle is built with patcher {patcher}; add the first Manager and Desktop that bundle it"
+        " to PATCHER_CLIENTS",
+    )
+    manager, desktop = PATCHER_CLIENTS[patcher]
+    require(
+        re.findall(r"Morphe Manager \((\d+\.\d+\.\d+) or newer\)", readme) == [manager],
+        f"README must ask once for Morphe Manager ({manager} or newer), the first to bundle patcher"
+        f" {patcher}, and name no other Manager that way",
+    )
+    require(
+        re.findall(r"Morphe Desktop (\d+\.\d+\.\d+) or newer", readme) == [desktop],
+        f"README must ask once for Morphe Desktop {desktop} or newer, the first to bundle patcher"
+        f" {patcher}, and name no other Desktop that way",
+    )
+
+
+def bundle_signer(root, data, required):
+    """The key the bundle is signed with, which has to be the one morphe-signing.pub publishes.
+
+    Morphe Manager 2.3 pins the first key a source signs with and refuses a later bundle signed with
+    another key or none, so every release after the first signed one has to carry this key.
+    """
+    signer = bundle_signature.verify(data)
+    if signer is None:
+        require(
+            not required,
+            "Bundle isn't signed. Build it with MORPHE_SIGNING_KEY set, which release.ps1 does",
+        )
+        return None
+    require(
+        signer == bundle_signature.read_public(root / BUNDLE_PUBLIC_KEY),
+        f"Bundle is signed with another key than {BUNDLE_PUBLIC_KEY}",
+    )
+    return signer
+
+
 def verify(root, bundle=None, evidence=None, release_tag=None, checksums=None):
     properties = dict(
         re.findall(
@@ -62,12 +195,15 @@ def verify(root, bundle=None, evidence=None, release_tag=None, checksums=None):
         release_tag is None or release_tag == f"v{version}",
         "Release tag differs from project version",
     )
-    digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+    data = bundle.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    signer = bundle_signer(root, data, required=True)
     with zipfile.ZipFile(bundle) as archive:
         require(
             {"classes.dex", "extensions/messenger.mpe"}.issubset(archive.namelist()),
             "Incomplete Android bundle",
         )
+        check_class_versions(archive)
         manifest = (
             archive.read("META-INF/MANIFEST.MF")
             .decode("utf-8")
@@ -81,8 +217,13 @@ def verify(root, bundle=None, evidence=None, release_tag=None, checksums=None):
         attributes.get("Version") == version,
         "Bundle manifest version differs from source",
     )
+    # Two missing values are equal, so a source without its timestamp would compare nothing.
     require(
-        attributes.get("Timestamp") == properties.get("bundleTimestampMillis"),
+        re.fullmatch(r"\d+", properties.get("bundleTimestampMillis", "")),
+        "Source has no bundle timestamp",
+    )
+    require(
+        attributes.get("Timestamp") == properties["bundleTimestampMillis"],
         "Bundle timestamp differs from source",
     )
 
@@ -90,8 +231,12 @@ def verify(root, bundle=None, evidence=None, release_tag=None, checksums=None):
     require(index.get("version") == version, "Source index version differs from source")
     require(
         index.get("download_url")
-        == f"https://github.com/HOANGGLEEE/Messenger1/releases/download/v{version}/{filename}",
+        == f"https://github.com/SysAdminDoc/HushMessenger/releases/download/v{version}/{filename}",
         "Source download URL differs from release version or artifact name",
+    )
+    require(
+        index.get("public_key") == signer,
+        "Source index public_key differs from the bundle's signing key",
     )
     timestamp = index.get("created_at", "")
     require(
@@ -147,22 +292,82 @@ def verify(root, bundle=None, evidence=None, release_tag=None, checksums=None):
         hashes == [(digest, filename)],
         "README artifact checksum differs from built bundle",
     )
+    # Manager 2.3 shows this fingerprint when it meets the source, for people to compare.
+    key_fingerprint = bundle_signature.fingerprint(signer)
+    require(
+        f"`{key_fingerprint}`" in readme,
+        "README doesn't print the bundle signing key's fingerprint",
+    )
     # Only this repository's release links (absolute in any case, or relative) and
     # its own bundle names; another project's release or bundle is not ours to pin.
     release_links = re.compile(
-        r"(?i)(?:HOANGGLEEE/Messenger1/|\.\./)releases/(?:tag|download)/v"
+        r"(?i)(?:SysAdminDoc/HushMessenger/|\.\./)releases/(?:tag|download)/v"
         r"(\d+\.\d+\.\d+)(?!\.?\d)"
         r"|(?<![\w.-])patches-(\d+\.\d+\.\d+)(?!\.?\d)"
     )
     for link in release_links.finditer(readme):
         advertised = link.group(1) or link.group(2)
         require(advertised == version, "README download link differs from source")
+    # Between releases these name the clients the published bundle needs, so they move at release.
+    check_client_minimums(readme, attributes.get("Patcher-Version"))
+    # Between releases the install step names the published release's Messenger version (#111),
+    # so a release that moves the target has to move that step with it.
+    targets = {
+        target["version"]
+        for entry in entries
+        for package in entry.get("compatiblePackages") or []
+        for target in package.get("targets") or []
+        if isinstance(target, dict) and isinstance(target.get("version"), str)
+    }
+    if targets:
+        step = re.search(r"^\d+\. \*\*Get the APK\.\*\*(.*)$", readme, re.MULTILINE)
+        require(step is not None, "README has no Get the APK step")
+        require(
+            all(target in step.group(1) for target in targets),
+            "README Get the APK step names a different Messenger version than the bundle targets",
+        )
+        # The Messenger badge sits next to the version badge, so it can't name a build the release refuses.
+        require(
+            all(
+                badge in targets
+                for badge in re.findall(r"shields\.io/badge/Messenger-([\d.]+)-", readme)
+            ),
+            "README Messenger badge names a different Messenger version than the bundle targets",
+        )
+        # The bug form's example answer names the release the same way, so a report copies a real pair.
+        form = (root / BUG_REPORT_FORM).read_text(encoding="utf-8")
+        example = re.search(
+            r"^\s*placeholder: HushMessenger (\S+) on Messenger (\S+)\s*$", form, re.MULTILINE
+        )
+        require(example is not None, "Bug report form has no HushMessenger ... on Messenger ... placeholder")
+        require(
+            example.group(1) == version,
+            "Bug report form placeholder names a different HushMessenger version than source",
+        )
+        require(
+            example.group(2) in targets,
+            "Bug report form placeholder names a Messenger version the bundle doesn't target",
+        )
+    # Its settings screenshots show this catalog, and the app's help links reach real headings.
+    check_captures(root)
     headings = re.findall(
         r"^## (.+)$", (root / "CHANGELOG.md").read_text(encoding="utf-8"), re.MULTILINE
     )
     require(
         bool(headings) and headings[0].startswith(version + " ("),
         "First changelog entry must be the release version",
+    )
+    groups = changelog_groups(root, version)
+    description = index.get("description")
+    summary = (
+        description[: -len(groups) - 2]
+        if isinstance(description, str) and description.endswith("\n\n" + groups)
+        else ""
+    )
+    require(
+        summary.strip() and not re.search(r"(?m)^#", summary),
+        f"Source index description must be a summary, then the CHANGELOG's {version} groups; "
+        "run -Stage prepare again",
     )
     extension_build = (root / "extensions/messenger/build.gradle.kts").read_text(
         encoding="utf-8"
@@ -178,7 +383,8 @@ def verify(root, bundle=None, evidence=None, release_tag=None, checksums=None):
             "Release checksum file differs from built bundle",
         )
     return (
-        f"Release metadata passed: v{version}, {len(entries)} patches, SHA-256 {digest}"
+        f"Release metadata passed: v{version}, {len(entries)} patches, SHA-256 {digest}, "
+        f"signed by {key_fingerprint}"
     )
 
 
@@ -227,9 +433,13 @@ def verify_development(root, bundle, evidence, held_index_sha256, checksums=None
     require(
         bundle.name == f"patches-{version}.mpp", "Bundle filename differs from source"
     )
-    digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+    data = bundle.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    # A development build may go unsigned, but a signature it carries has to be the release key's.
+    bundle_signer(root, data, required=False)
     with zipfile.ZipFile(bundle) as archive:
         require(archive.testzip() is None, "Corrupt bundle entry")
+        check_class_versions(archive)
         manifest = (
             archive.read("META-INF/MANIFEST.MF")
             .decode("utf-8")
@@ -240,8 +450,13 @@ def verify_development(root, bundle, evidence, held_index_sha256, checksums=None
             line.split(": ", 1) for line in manifest.splitlines() if ": " in line
         )
     require(attributes.get("Version") == version, "Bundle version differs from source")
+    # Two missing values are equal, so a source without its timestamp would compare nothing.
     require(
-        attributes.get("Timestamp") == properties.get("bundleTimestampMillis"),
+        re.fullmatch(r"\d+", properties.get("bundleTimestampMillis", "")),
+        "Source has no bundle timestamp",
+    )
+    require(
+        attributes.get("Timestamp") == properties["bundleTimestampMillis"],
         "Bundle timestamp differs from source",
     )
     fresh = read_json(evidence)
@@ -283,7 +498,7 @@ def verify_development(root, bundle, evidence, held_index_sha256, checksums=None
     )
     require(
         index.get("download_url")
-        == f"https://github.com/HOANGGLEEE/Messenger1/releases/download/v{public_version}/patches-{public_version}.mpp",
+        == f"https://github.com/SysAdminDoc/HushMessenger/releases/download/v{public_version}/patches-{public_version}.mpp",
         "Invalid held download URL",
     )
     # The operator's hash only pins the file it was taken from; the tag pins what was published.
@@ -337,18 +552,44 @@ def stop_process_tree(process):
     process.kill()
 
 
+def run_bounded(command, *, timeout, capture_output=False, **kwargs):
+    """subprocess.run that stops the whole process tree when the limit passes.
+
+    Through the build queue the direct child is PowerShell, which starts the real job.
+    subprocess.run kills only that child and then waits on pipes the job still holds, so a
+    hung job would hang the caller and keep running outside any queue slot.
+    """
+    if capture_output:
+        kwargs["stdout"] = kwargs["stderr"] = subprocess.PIPE
+    with subprocess.Popen(command, start_new_session=sys.platform != "win32", **kwargs) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            stop_process_tree(process)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.communicate(timeout=30)
+            raise subprocess.TimeoutExpired(command, timeout) from None
+        except BaseException:
+            stop_process_tree(process)
+            raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def validate_catalog(root, bundle, evidence):
     """Run the same catalog/definition checks without invoking a bundle producer."""
     evidence.unlink(missing_ok=True)
+    limit = time_limit(CATALOG_TIMEOUT, gradle_job=True)
     process = subprocess.Popen(
-        [
-            str(root / "gradlew.bat" if sys.platform == "win32" else root / "gradlew"),
-            ":patches:checkFrozenPatchCatalog",
-            f"-PvalidationBundle={bundle.resolve()}",
-            f"-PvalidationEvidence={evidence.resolve()}",
-            "--no-daemon",
-            "--no-configuration-cache",
-        ],
+        gradle(
+            root,
+            [
+                ":patches:checkFrozenPatchCatalog",
+                f"-PvalidationBundle={bundle.resolve()}",
+                f"-PvalidationEvidence={evidence.resolve()}",
+                "--no-daemon",
+                "--no-configuration-cache",
+            ],
+        ),
         cwd=root,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -358,7 +599,7 @@ def validate_catalog(root, bundle, evidence):
         start_new_session=sys.platform != "win32",
     )
     try:
-        stdout, stderr = process.communicate(timeout=CATALOG_TIMEOUT)
+        stdout, stderr = process.communicate(timeout=limit)
     except subprocess.TimeoutExpired:
         # Killing only the wrapper leaves the Gradle JVM holding the output pipes.
         stop_process_tree(process)
@@ -367,7 +608,7 @@ def validate_catalog(root, bundle, evidence):
         except subprocess.TimeoutExpired:
             stdout, stderr = "", "A leftover process still holds the output pipes."
         raise ValueError(
-            f"Catalog/DEX validation timed out after {CATALOG_TIMEOUT} s\n"
+            f"Catalog/DEX validation timed out after {limit} s\n"
             + (stdout + stderr)[-4000:]
         ) from None
     require(
@@ -446,7 +687,9 @@ def signer_fingerprints(path):
         fields = line.split()
         if not fields or fields[0].startswith("#"):
             continue
-        at = next(i for i, f in enumerate(fields) if f.startswith(KEY_TYPES))
+        at = next((i for i, f in enumerate(fields) if f.startswith(KEY_TYPES)), None)
+        if at is None or at + 1 >= len(fields):
+            raise ValueError(f"{path.name} has a signer line with no key: {line[:60]!r}")
         digest = hashlib.sha256(base64.b64decode(fields[at + 1])).digest()
         prints.append("SHA256:" + base64.b64encode(digest).decode().rstrip("="))
     return prints
@@ -520,8 +763,26 @@ def main(argv=None):
         action="store_true",
         help="also check <checksums>.sig against scripts/release_signers",
     )
+    parser.add_argument(
+        "--describe",
+        action="store_true",
+        help="write the release's CHANGELOG groups after the source index description's summary",
+    )
     args = parser.parse_args(argv)
     args.root = args.root.resolve()
+    checks = (
+        args.bundle,
+        args.evidence,
+        args.release_tag,
+        args.checksums,
+        args.development,
+        args.held_index_sha256,
+        args.freeze,
+        args.bundle_sha256,
+        args.verify_signature,
+    )
+    if args.describe and any(checks):
+        parser.error("--describe only writes the source index description")
     if args.verify_signature and args.checksums is None:
         parser.error("--verify-signature needs --checksums")
     if args.development:
@@ -542,6 +803,9 @@ def main(argv=None):
     elif args.freeze or args.held_index_sha256 or args.bundle_sha256:
         parser.error("development options need --development")
     try:
+        if args.describe:
+            print(describe(args.root))
+            return 0
         if args.development:
             bundle = args.bundle
             if bundle is None:

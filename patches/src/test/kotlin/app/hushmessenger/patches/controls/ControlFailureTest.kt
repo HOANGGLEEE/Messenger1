@@ -1,6 +1,7 @@
 package app.hushmessenger.patches.controls
 
 import app.morphe.patcher.PatcherConfig
+import app.morphe.patcher.PatcherProgress
 import app.morphe.patcher.patch.BytecodePatch
 import app.morphe.patcher.patch.BytecodePatchContext
 import app.morphe.patcher.patch.PatchException
@@ -8,6 +9,8 @@ import app.morphe.patcher.patch.ResourcePatch
 import app.morphe.patcher.patch.ResourcePatchContext
 import app.morphe.patcher.resource.ResourceMode
 import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod
+import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
+import com.android.tools.smali.dexlib2.iface.reference.StringReference
 import java.nio.file.Path
 import java.nio.file.Files
 import org.junit.jupiter.api.io.TempDir
@@ -24,7 +27,7 @@ class ControlFailureTest {
         val anchor = pluginGates.getValue("people").anchors.single()
         val first = fixtureMethod("LX/1pm;->A0C()Z", pluginBody(anchor))
         val second = fixtureMethod("LX/2Wl;->A04()Z", pluginBody(anchor, "if-ne"))
-        val found = findControls(listOf(fixtureClass(first.definingClass, listOf(first)),
+        val found = mirroredControls(listOf(fixtureClass(first.definingClass, listOf(first)),
             fixtureClass(second.definingClass, listOf(second))))
         validateControls(found, setOf("people"))
         val methods = found.getValue("people").map { it as MutableMethod }
@@ -48,14 +51,18 @@ class ControlFailureTest {
     @Test fun successfulControlStateDoesNotLeakIntoTheNextFailedRun(@TempDir temporary: Path) {
         val feature = hidePeoplePatch.dependencies.filterIsInstance<ResourcePatch>().single()
         val discovery = hidePeoplePatch.dependencies.filterIsInstance<BytecodePatch>().single()
-        for (broken in listOf(false, true)) withResourceContext(temporary.resolve("run-$broken")) { resources, config ->
+        for (broken in listOf("none", "gate", "route")) withResourceContext(temporary.resolve("run-$broken")) { resources, config ->
+            // The fixtures carry the synthetic names, and discovery picks the profile by the APK's version code. The
+            // extension's resource APK stands in for Messenger here, so its code gets the synthetic profile.
+            controlProfilesInUse = controlProfiles + (resources.packageMetadata.versionCode!!.toInt() to SYNTHETIC_PROFILE)
             val anchor = pluginGates.getValue("people").anchors.single()
             val listEnd = pluginGates.getValue("people_list_end").anchors.single()
-            // A supported APK supplies all six suggestion placements the control selects.
+            // A supported APK supplies all six suggestion placements the control selects, and the chat list supplier.
+            // An observer that no longer sets the listed count fails the whole control before any edit.
             val classes = listOf(
                 fixtureMethod("LX/1pm;->A0C()Z", pluginBody(anchor)),
                 fixtureMethod("LX/1pm;->A0B()Z", pluginBody(listEnd)),
-                fixtureMethod("LX/2Wl;->A04()Z", pluginBody(anchor, if (broken) "if-ne" else "if-eq")),
+                fixtureMethod("LX/2Wl;->A04()Z", pluginBody(anchor, if (broken == "gate") "if-ne" else "if-eq")),
                 fixtureMethod("LX/2Wl;->A03()Z", pluginBody(listEnd)),
                 peopleJewelMethod(),
                 peopleTabMethod(),
@@ -63,22 +70,29 @@ class ControlFailureTest {
                 peopleSearchMethod(),
                 peopleStoryMethod(),
             ).groupBy { it.definingClass }.map { (type, methods) -> fixtureClass(type, methods) }
-                .plus(peopleJewelKeyHolder()).plus(screenHostClasses()).toSet()
+                .plus(peopleJewelKeyHolder()).plus(screenHostClasses())
+                .plus(if (broken == "route") listOf(inboxSupplierClass(), inboxObserverClass(low = 0)) else inboxRefreshClasses()).toSet()
             val context = BytecodePatchContext::class.java.declaredConstructors.single()
                 .newInstance(config, resources.packageMetadata) as BytecodePatchContext
             val patchClasses = Class.forName("app.morphe.patcher.util.PatchClasses")
             BytecodePatchContext::class.java.getMethod("setPatchClasses\$morphe_patcher", patchClasses)
-                .invoke(context, patchClasses.getConstructor(Set::class.java).newInstance(classes))
+                .invoke(context, patchClasses.getConstructor(Set::class.java, PatcherProgress::class.java).newInstance(classes, null))
             context.use {
                 feature.execute(resources)
                 discovery.execute(context)
                 try {
-                    if (broken) assertFailsWith<PatchException> { hidePeoplePatch.execute(context) }
+                    if (broken != "none") assertFailsWith<PatchException> { hidePeoplePatch.execute(context) }
                     else hidePeoplePatch.execute(context)
                     feature.finalize(resources)
-                    assertEquals(!broken, resources.hasPeopleFeature())
+                    assertEquals(broken == "none", resources.hasPeopleFeature())
                     // A Root Mount install reads the same list from the patched code.
-                    assertEquals(if (broken) emptySet() else setOf("people"), bundledControls.toSet())
+                    assertEquals(if (broken != "none") emptySet() else setOf("people"), bundledControls.toSet())
+                    val route = context.mutableClassDefBy(HOST_SCREENS).methods.single { it.hookId() == INBOX_REFRESH_ROUTE }
+                    assertEquals(if (broken == "none") INBOX_ROUTE.toString() else "",
+                        ((route.implementation!!.instructions.first() as ReferenceInstruction).reference as StringReference).string, broken)
+                    val items = context.mutableClassDefBy(INBOX_SUPPLIER).methods.single { it.hookId() == INBOX_ITEMS_HOOK }
+                    assertEquals(if (broken == "none") INBOX_ITEMS_CALL else INBOX_ITEMS_TRACE,
+                        (items.implementation!!.instructions.first() as ReferenceInstruction).reference.let { (it as? StringReference)?.string ?: it.toString() }, broken)
                 } finally {
                     discovery.finalize(context)
                 }
@@ -97,6 +111,7 @@ class ControlFailureTest {
                 assertFailsWith<PatchException> { menuSettingsPatch.execute(context) }
                 record.finalize(resources)
                 assertEquals(false, resources.hasFeature("menu_row"), "A failed Menu row was advertised")
+                assertEquals(false, resources.hasFeature(LOGO_LONG_PRESS), "A failed Menu row advertised the logo")
             }
         }
     }
@@ -108,35 +123,53 @@ class ControlFailureTest {
         val record = menuSettingsPatch.dependencies.filterIsInstance<ResourcePatch>().single()
         val discovery = menuSettingsPatch.dependencies.filterIsInstance<BytecodePatch>().single()
         try {
-            assertEquals(7, controlProfiles.values.distinct().size)
             for ((group, profile) in controlProfiles.values.distinct().withIndex()) {
                 activeProfile = profile
                 val ids = profile.hooks.getValue("menu_settings")
-                for (broken in listOf("none", "add", "bind", "drawer", "click", "bind-registers", "drawer-registers",
-                    "refresh-result", "row-store", "factory", "click-branch", "click-late-branch")) {
+                for (broken in listOf("none", "no-logo", "menu-title-only", "add", "bind", "drawer", "click", "bind-registers",
+                    "drawer-registers", "refresh-result", "row-store", "factory", "click-branch", "click-late-branch")) {
                     // The fifth mandatory target now needs complete native model contracts, not a MenuRow placeholder.
-                    val classes = legacyDrawerFixture(profile, broken).classes.toSet()
+                    // Every case but no-logo also has the Chats title handler the logo's long press goes in through, and
+                    // menu-title-only has the Menu tab's title handler without the Chats one.
+                    val drawer = legacyDrawerFixture(profile, if (broken in setOf("no-logo", "menu-title-only")) "none" else broken).classes
+                    val classes = when (broken) {
+                        "no-logo" -> drawer
+                        "menu-title-only" -> drawer + chatsTitleClasses().drop(1)
+                        else -> drawer + chatsTitleClasses()
+                    }.toSet()
+                    val applies = broken in setOf("none", "no-logo", "menu-title-only")
                     withResourceContext(temporary.resolve("$group-$broken")) { resources, config ->
                         val context = BytecodePatchContext::class.java.declaredConstructors.single()
                             .newInstance(config, resources.packageMetadata) as BytecodePatchContext
                         val patchClasses = Class.forName("app.morphe.patcher.util.PatchClasses")
                         BytecodePatchContext::class.java.getMethod("setPatchClasses\$morphe_patcher", patchClasses)
-                            .invoke(context, patchClasses.getConstructor(Set::class.java).newInstance(classes))
+                            .invoke(context, patchClasses.getConstructor(Set::class.java, PatcherProgress::class.java).newInstance(classes, null))
                         context.use {
                             record.execute(resources)
-                            discoveredControls = findControls(classes)
+                            discoveredControls = mirroredControls(classes)
                             validateControls(discoveredControls, setOf("menu_settings"))
+                            logoLongPressSites = findLogoLongPress(classes)
+                            menuTitleLongPressSites = findLogoLongPress(classes, MENU_TAB_TITLE)
                             bundledControls.clear()
                             val targets = classes.flatMap { it.methods }.filter { it.hookId() in ids }
                             val allMethods = classes.flatMap { it.methods }.filter { it.implementation != null }
                             val originalFactory = classes.single { it.type == SETTINGS }.methods.single { it.hookId() == LEGACY_SECTION }
                             val before = allMethods.map { it.implementation!!.instructions.toList() }
-                            if (broken == "none") {
+                            if (applies) {
                                 menuSettingsPatch.execute(context)
                                 assertTrue(targets.all { method -> method.implementation!!.instructions.any {
                                     (it as? com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction)
                                         ?.reference.toString().startsWith("$SETTINGS->")
                                 } })
+                                // The logo and the Menu title get their long press where the handlers are, and a build
+                                // without them keeps the rest.
+                                for (title in listOf(SYNTHETIC_LOGO_LONG_PRESS, SYNTHETIC_MENU_TITLE_LONG_PRESS)) {
+                                    val calls = allMethods.filter { it.hookId() == title }.flatMap { method ->
+                                        method.implementation!!.instructions.filter { (it as? ReferenceInstruction)?.reference?.toString() == LOGO_LONG_PRESSED }
+                                    }
+                                    val hooked = broken == "none" || (broken == "menu-title-only" && title == SYNTHETIC_MENU_TITLE_LONG_PRESS)
+                                    assertEquals(if (hooked) 1 else 0, calls.size, "$group $broken $title")
+                                }
                                 // The stub is swapped for the generated factory in both method views the dex writer reads.
                                 val settings = classes.single { it.type == SETTINGS }
                                 val factory = settings.methods.single { it.hookId() == LEGACY_SECTION }
@@ -149,8 +182,12 @@ class ControlFailureTest {
                                 assertSame(originalFactory, classes.single { it.type == SETTINGS }.methods.single { it.hookId() == LEGACY_SECTION })
                             }
                             record.finalize(resources)
-                            assertEquals(broken == "none", resources.hasFeature("menu_row"))
-                            assertEquals(if (broken == "none") setOf("menu_row") else emptySet(), bundledControls.toSet())
+                            assertEquals(applies, resources.hasFeature("menu_row"))
+                            // Settings mention the logo only where its long press went in.
+                            val logo = broken == "none"
+                            assertEquals(logo, resources.hasFeature(LOGO_LONG_PRESS), "$group $broken logo")
+                            assertEquals(setOfNotNull("menu_row".takeIf { applies }, LOGO_LONG_PRESS.takeIf { logo }),
+                                bundledControls.toSet(), "$group $broken")
                         }
                     }
                 }

@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import io
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +16,15 @@ from unittest.mock import patch
 from zipfile import BadZipFile, ZipFile
 
 from scripts import verify_patch_heap as checker
+
+
+def setUpModule():
+    # These tests check the plain command lines, so keep this PC's build queue out of them.
+    queue_off = patch.dict(
+        os.environ, {"HUSHMESSENGER_BUILD_WRAPPER": "", "BUILD_QUEUE_SCRIPT": ""}
+    )
+    queue_off.start()
+    unittest.addModuleCleanup(queue_off.stop)
 
 
 class PatchHeapChecks(unittest.TestCase):
@@ -97,7 +107,7 @@ class PatchHeapChecks(unittest.TestCase):
                     checked.append(code)
                 return f"PASS {code}"
 
-            # The real records and supported codes, not fixtures: 580 and 581 together.
+            # The real records and supported codes, not fixtures.
             with (
                 patch.object(checker, "ROOT", root),
                 patch.object(checker, "verify_development", return_value="metadata OK"),
@@ -109,8 +119,7 @@ class PatchHeapChecks(unittest.TestCase):
             ):
                 self.assertEqual(0, checker.main())
             self.assertEqual(sorted(checker.recorded_builds()), sorted(checked))
-            self.assertIn(346013387, checked)
-            self.assertIn(346213494, checked)
+            self.assertIn(347415354, checked)
 
     def test_corrupt_output_entry_fails_that_build_and_keeps_the_others(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -183,8 +192,8 @@ class PatchHeapChecks(unittest.TestCase):
                     bundle_sha256=hashlib.sha256(bundle.read_bytes()).hexdigest(),
                 )
                 with patch.object(
-                    checker.subprocess,
-                    "run",
+                    checker,
+                    "run_bounded",
                     return_value=subprocess.CompletedProcess(
                         [], code, "Loaded DEX classes\n", ""
                     ),
@@ -203,6 +212,11 @@ class PatchHeapChecks(unittest.TestCase):
     def test_complete_and_failed_runs_keep_stock_and_remove_temporary_outputs(self):
         for case in (
             "valid",
+            "step-results",
+            "step-results-failed-step",
+            "step-results-no-steps",
+            "desktop-1.19",
+            "desktop-1.19-missing-patch",
             "missing-theme",
             "wrong-counts",
             "missing-patch",
@@ -295,27 +309,40 @@ class PatchHeapChecks(unittest.TestCase):
                         stock.write_bytes(b"patcher changed input")
                     if case == "changed-bundle":
                         args.bundle.write_bytes(b"changed frozen input")
-                    report.write_text(
-                        json.dumps(
-                            {
-                                "appliedPatches": [{"name": "Material You theme"}]
-                                + (
-                                    []
-                                    if case == "missing-patch"
-                                    else [{"name": "Other patch"}]
-                                ),
-                                "failedPatches": [],
-                                "patchingSteps": [
-                                    {"step": "PATCHING", "success": True},
-                                    {
-                                        "step": "REBUILDING",
-                                        "success": case != "failed-step",
-                                    },
-                                ],
-                            }
+                    outcome = {
+                        "appliedPatches": [{"name": "Material You theme"}]
+                        + (
+                            []
+                            if case in ("missing-patch", "desktop-1.19-missing-patch")
+                            else [{"name": "Other patch"}]
                         ),
-                        encoding="utf-8",
-                    )
+                        "failedPatches": [],
+                        "patchingSteps": [
+                            {"step": "PATCHING", "success": True},
+                            {
+                                "step": "REBUILDING",
+                                "success": case
+                                not in ("failed-step", "step-results-failed-step"),
+                            },
+                        ],
+                    }
+                    # Desktop 1.19.0 renamed patchingSteps to stepResults.
+                    if case.startswith("step-results"):
+                        steps = outcome.pop("patchingSteps")
+                        if case != "step-results-no-steps":
+                            outcome["stepResults"] = steps
+                    # Desktop 1.19.0 writes PatchEngine.Result: plain names and stepResults with an error field.
+                    if case.startswith("desktop-1.19"):
+                        outcome = {
+                            "success": True,
+                            "packageName": "com.facebook.orca",
+                            "appliedPatches": [p["name"] for p in outcome["appliedPatches"]],
+                            "failedPatches": [],
+                            "stepResults": [
+                                dict(step, error=None) for step in outcome["patchingSteps"]
+                            ],
+                        }
+                    report.write_text(json.dumps(outcome), encoding="utf-8")
                     count = 613 if case == "wrong-counts" else 614
                     owners = 24 if case == "wrong-classes" else 23
                     log = (
@@ -327,8 +354,8 @@ class PatchHeapChecks(unittest.TestCase):
                         command, 1 if case == "nonzero" else 0, log, ""
                     )
 
-                with patch.object(checker.subprocess, "run", side_effect=run):
-                    if case == "valid":
+                with patch.object(checker, "run_bounded", side_effect=run):
+                    if case in ("valid", "step-results", "desktop-1.19"):
                         self.assertIn(
                             "PASS 123: 2 patches, 1024 MB",
                             checker.check_build(
@@ -357,7 +384,7 @@ class PatchHeapChecks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             stock = Path(directory) / "messenger-580-123.apk"
             stock.write_bytes(b"different APK")
-            with patch.object(checker.subprocess, "run") as run:
+            with patch.object(checker, "run_bounded") as run:
                 with self.assertRaisesRegex(ValueError, "does not match"):
                     checker.check_build(
                         argparse.Namespace(stock_dir=Path(directory)),
@@ -378,7 +405,7 @@ class PatchHeapChecks(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "found 0"):
                 checker.stock_apk(root, 456)
             (root / "messenger-580-123.apk").write_bytes(b"same code twice")
-            with patch.object(checker.subprocess, "run") as run:
+            with patch.object(checker, "run_bounded") as run:
                 with self.assertRaisesRegex(ValueError, "found 2"):
                     checker.check_build(
                         argparse.Namespace(stock_dir=root), 123, "0" * 64, set()
@@ -480,7 +507,7 @@ class PatchHeapChecks(unittest.TestCase):
                     json.dumps(
                         {
                             "version": "1.2.2",
-                            "download_url": "https://github.com/HOANGGLEEE/Messenger1/releases/download/v1.2.2/patches-1.2.2.mpp",
+                            "download_url": "https://github.com/SysAdminDoc/HushMessenger/releases/download/v1.2.2/patches-1.2.2.mpp",
                         }
                     )
                 )

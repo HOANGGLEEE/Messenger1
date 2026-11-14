@@ -5,10 +5,12 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.Application;
 import android.content.Context;
+import android.hardware.display.DisplayManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.text.TextUtils;
+import android.view.Display;
 import android.view.View;
 import android.view.animation.AlphaAnimation;
 import android.view.animation.Animation;
@@ -103,28 +105,73 @@ public final class ChatAnimation {
         return slide;
     }
 
-    /** A frame this much later than the last one is a stall, not the animation's own time. */
-    static final long STALL = 34;
+    /** One frame at 60 Hz, used when the screen's own rate can't be read. */
     static final long FRAME = 17;
+    /** A frame more than two frames plus this much after the last one is a stall, not the animation's own time. */
+    static final long SLACK = 2;
     /** How long the inbox waits for a chat that hasn't drawn yet. */
     static final long PENDING = 1000;
+    /** How long after a sliding chat's latest frame the inbox stays drawn under it, so one late frame can't uncover it. */
+    static final long KEEP = 4 * FRAME;
     /** Until when a chat sliding in still needs the inbox drawn under it. */
     static volatile long slidingInUntil;
+
+    /**
+     * One frame at the screen's current refresh rate. A 120 Hz screen draws every 8 ms, so a 25 ms stall there skips
+     * three frames of the slide, which a 60 Hz threshold let through (#28).
+     */
+    static long frame() {
+        try {
+            Context context = Settings.appContext;
+            DisplayManager displays = context == null ? null : context.getSystemService(DisplayManager.class);
+            Display display = displays == null ? null : displays.getDisplay(Display.DEFAULT_DISPLAY);
+            float rate = display == null ? 0f : display.getRefreshRate();
+            if (rate >= 30f && rate <= 500f) return Math.min(FRAME, Math.round(1000f / rate));
+        } catch (RuntimeException ignored) {
+            // The 60 Hz frame is what the slide used before it read the screen's rate.
+        }
+        return FRAME;
+    }
 
     /**
      * Messenger builds the chat on the main thread while the slide starts, so the next frame can come 100 ms late,
      * when the slide is nearly over. This moves the start forward by a stall so the slide goes on from where it was.
      */
-    static long steady(Animation animation, long lastFrame, long now) {
-        if (lastFrame > 0 && animation.hasStarted() && now - lastFrame > STALL) {
-            animation.setStartTime(animation.getStartTime() + now - lastFrame - FRAME);
+    static long steady(Animation animation, long lastFrame, long now, long frame) {
+        if (lastFrame > 0 && animation.hasStarted() && now - lastFrame > 2 * frame + SLACK) {
+            animation.setStartTime(animation.getStartTime() + now - lastFrame - frame);
         }
         return now;
     }
 
+    /** A frame this long after the one before it, slower than 40 a second, would jump on any screen. */
+    static final long LATE = FRAME + FRAME / 2;
+    /** How long a slide waits at its first position, at most, for Messenger to draw on time. */
+    static final long WAIT = 250;
+
+    /**
+     * Messenger's first frames for a chat often come late, most of all after a cold start, and a late frame early on
+     * lands in the slide's fastest part. Until a frame comes on time, a late one starts the slide over at that frame.
+     * Every frame before it drew the slide's first position, with the chat wholly off screen (or wholly on it, sliding
+     * out), so the wait shows as a short pause instead of a jump (#28). Returns whether the slide is under way.
+     */
+    static boolean underWay(Animation animation, long lastFrame, long now, long firstFrame, long frame) {
+        if (lastFrame <= 0) return false;
+        if (now - lastFrame <= LATE) {
+            // On time for any screen, though a faster screen's own frame still decides whether this one stalled.
+            steady(animation, lastFrame, now, frame);
+            return true;
+        }
+        animation.setStartTime(now);
+        return now - firstFrame >= WAIT;
+    }
+
     static final class Slide extends TranslateAnimation {
         private final boolean in;
+        private final long frame = frame();
         private long lastFrame;
+        private long firstFrame;
+        private boolean underWay;
 
         Slide(boolean in, float side) {
             super(RELATIVE_TO_SELF, in ? side : 0f, RELATIVE_TO_SELF, in ? 0f : side, ABSOLUTE, 0f, ABSOLUTE, 0f);
@@ -132,27 +179,36 @@ public final class ChatAnimation {
         }
 
         @Override public boolean getTransformation(long now, Transformation out) {
-            lastFrame = steady(this, lastFrame, now);
+            if (underWay) {
+                lastFrame = steady(this, lastFrame, now, frame);
+            } else {
+                if (lastFrame <= 0) firstFrame = now;
+                underWay = underWay(this, lastFrame, now, firstFrame, frame);
+                lastFrame = now;
+            }
             boolean more = super.getTransformation(now, out);
-            if (in) slidingInUntil = more ? now + 2 * STALL : 0;
+            if (in) slidingInUntil = more ? now + KEEP : 0;
             return more;
         }
     }
 
     /** Draws the inbox as it is for the slide's length, and longer while a chat is still sliding in over it. */
     static final class Hold extends AlphaAnimation {
+        private final long frame = frame();
         private long lastFrame;
 
         Hold() { super(1f, 1f); }
 
         @Override public boolean getTransformation(long now, Transformation out) {
-            lastFrame = steady(this, lastFrame, now);
+            lastFrame = steady(this, lastFrame, now, frame);
             return super.getTransformation(now, out) | now < slidingInUntil;
         }
     }
 
     /** Search and notifications open a chat as an activity of its own instead of a fragment over the inbox. */
     static final String CHAT_ACTIVITY = "com.facebook.messaging.msys.thread.fragment.MsysThreadViewActivity";
+    /** Page and business chats open in Messenger's older chat activity, so they slide too (#28). */
+    static final String BUSINESS_CHAT_ACTIVITY = "com.facebook.orca.threadview.ThreadViewActivity";
     /** Android takes an activity's transition only from a resource, so the patch adds these to Messenger's own. */
     static final String IN = "hush_chat_in";
     static final String OUT = "hush_chat_out";
@@ -179,10 +235,15 @@ public final class ChatAnimation {
         return ids;
     }
 
+    static boolean chatActivity(Activity activity) {
+        String name = activity.getClass().getName();
+        return CHAT_ACTIVITY.equals(name) || BUSINESS_CHAT_ACTIVITY.equals(name);
+    }
+
     static final class ChatActivities implements Application.ActivityLifecycleCallbacks {
         @Override @SuppressWarnings("deprecation") public void onActivityCreated(Activity activity, Bundle state) {
             // A chat Android brings back after a restart or a rotation is already on screen.
-            if (state != null || !CHAT_ACTIVITY.equals(activity.getClass().getName())) return;
+            if (state != null || !chatActivity(activity)) return;
             try {
                 if (!on()) return;
                 int[] ids = transitions(activity);

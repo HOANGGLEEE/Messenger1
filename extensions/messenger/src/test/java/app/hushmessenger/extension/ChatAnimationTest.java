@@ -11,6 +11,7 @@ import android.view.animation.Animation;
 import android.view.animation.Transformation;
 import android.view.animation.TranslateAnimation;
 import com.facebook.messaging.msys.thread.fragment.MsysThreadViewActivity;
+import com.facebook.orca.threadview.ThreadViewActivity;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -25,6 +26,7 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.android.controller.ActivityController;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowActivity;
+import org.robolectric.shadows.ShadowDisplay;
 import org.robolectric.shadows.ShadowLooper;
 import static app.hushmessenger.extension.ChatAnimation.CHAT;
 import static app.hushmessenger.extension.ChatAnimation.INBOX;
@@ -34,7 +36,7 @@ import static org.robolectric.Shadows.shadowOf;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35)
 public class ChatAnimationTest {
-    /** The entrance Messenger 580 gives a chat it opens from the inbox, search or a notification. */
+    /** Stands in for the entrance Messenger gives a chat it opens from the inbox, search or a notification. */
     private static final int THREAD_ENTER = 0x7f18000a;
 
     /** What the patch's animation resources resolve to in these tests. */
@@ -60,6 +62,7 @@ public class ChatAnimationTest {
     @After public void restore() {
         Locale.setDefault(locale);
         durationScale(1f);
+        shadowOf(ShadowDisplay.getDefaultDisplay()).setRefreshRate(60f);
         ChatAnimation.animations = LOOKUP;
     }
 
@@ -211,8 +214,10 @@ public class ChatAnimationTest {
         Transformation frame = new Transformation();
         assertTrue(open.getTransformation(start, frame));
         assertEquals(100f, x(frame), 0.01f);
+        // One frame on time gets the slide under way (a late one before that only delays its start).
+        assertTrue(open.getTransformation(start + 16, frame));
         // Messenger builds the chat on the main thread, so the next frame comes 120 ms late.
-        assertTrue(open.getTransformation(start + 120, frame));
+        assertTrue(open.getTransformation(start + 136, frame));
         Animation plain = new TranslateAnimation(Animation.RELATIVE_TO_SELF, 1f, Animation.RELATIVE_TO_SELF, 0f,
             Animation.ABSOLUTE, 0f, Animation.ABSOLUTE, 0f);
         plain.setDuration(ChatAnimation.SLIDE_IN);
@@ -220,13 +225,123 @@ public class ChatAnimationTest {
         plain.initialize(100, 100, 100, 100);
         Transformation skipped = new Transformation();
         plain.getTransformation(start, skipped);
-        plain.getTransformation(start + 120, skipped);
-        // Only one frame of the slide went by, where a plain slide would be most of the way in.
+        plain.getTransformation(start + 16, skipped);
+        plain.getTransformation(start + 136, skipped);
+        // Only two frames of the slide went by, where a plain slide would be most of the way in.
         assertTrue(x(frame) > 2 * x(skipped));
         // Steady frames after that finish it within the slide's own length.
-        long now = start + 120;
-        while (open.getTransformation(now += 16, frame)) assertTrue(now < start + 120 + ChatAnimation.SLIDE_IN);
+        long now = start + 136;
+        while (open.getTransformation(now += 16, frame)) assertTrue(now < start + 136 + ChatAnimation.SLIDE_IN);
         assertEquals(0f, x(frame), 0.01f);
+    }
+
+    /** Where a slide and a plain one with the same curve are after frames at these times, for a view 100 wide. */
+    private static float[] slideAndPlain(long... times) {
+        Animation slide = ChatAnimation.create(new Object(), CHAT, true, THREAD_ENTER);
+        Animation plain = new TranslateAnimation(Animation.RELATIVE_TO_SELF, 1f, Animation.RELATIVE_TO_SELF, 0f,
+            Animation.ABSOLUTE, 0f, Animation.ABSOLUTE, 0f);
+        plain.setDuration(ChatAnimation.SLIDE_IN);
+        plain.setInterpolator(slide.getInterpolator());
+        slide.initialize(100, 100, 100, 100);
+        plain.initialize(100, 100, 100, 100);
+        Transformation a = new Transformation(), b = new Transformation();
+        for (long time : times) {
+            slide.getTransformation(time, a);
+            plain.getTransformation(time, b);
+        }
+        return new float[] {x(a), x(b)};
+    }
+
+    @Test public void aStallOnA120HzScreenIsCaughtThoughItWouldPassAt60() {
+        on();
+        long t = SystemClock.uptimeMillis();
+        // The close on a 120 Hz Galaxy S22 stalls 25 to 33 ms, three or four of its 8 ms frames.
+        long[] stalled = {t, t + 8, t + 16, t + 41};
+        float[] at60 = slideAndPlain(stalled);
+        assertEquals("under the 60 Hz threshold", at60[1], at60[0], 0.01f);
+
+        shadowOf(ShadowDisplay.getDefaultDisplay()).setRefreshRate(120f);
+        assertEquals(8, ChatAnimation.frame());
+        float[] at120 = slideAndPlain(stalled);
+        float[] oneFrameOn = slideAndPlain(t, t + 8, t + 16, t + 24);
+        assertEquals("the slide goes one frame on from where it was", oneFrameOn[1], at120[0], 0.01f);
+        assertTrue(at120[0] > at120[1] + 5);
+    }
+
+    @Test public void framesAtHalfTheScreensRateAreNotTakenForStalls() {
+        on();
+        shadowOf(ShadowDisplay.getDefaultDisplay()).setRefreshRate(120f);
+        long start = SystemClock.uptimeMillis();
+        Animation open = ChatAnimation.create(new Object(), CHAT, true, THREAD_ENTER);
+        open.initialize(100, 100, 100, 100);
+        Transformation frame = new Transformation();
+        // A busy 120 Hz screen can drop to every other frame. The slide still keeps its own length, plus the one frame
+        // Animation draws after it ends.
+        long now = start;
+        while (open.getTransformation(now, frame)) {
+            now += now % 2 == 0 ? 17 : 16;
+            assertTrue(now <= start + ChatAnimation.SLIDE_IN + 2 * ChatAnimation.FRAME);
+        }
+        assertEquals(0f, x(frame), 0.01f);
+    }
+
+    @Test public void aLateFrameBeforeTheChatMovesWaitsOffScreenInsteadOfJumping() {
+        on();
+        long t = SystemClock.uptimeMillis();
+        // A warm open on the S22 at 60 Hz: the chat's second frame came 34 ms after its first, which the stall check
+        // lets through, so a plain slide jumps a fifth of the way in at once.
+        float[] late = slideAndPlain(t, t + 34);
+        assertEquals("still wholly off screen", 100f, late[0], 0.01f);
+        assertTrue(late[1] < 90f);
+        // The next frame on time moves it one frame on from the late one.
+        float[] oneFrame = slideAndPlain(t, t + 17);
+        assertEquals(oneFrame[1], slideAndPlain(t, t + 34, t + 51)[0], 0.01f);
+        // Frames on time from the first never wait.
+        assertEquals(oneFrame[1], oneFrame[0], 0.01f);
+
+        // Sliding out, it waits wholly on screen.
+        Object chat = new Object();
+        ChatAnimation.create(chat, CHAT, true, THREAD_ENTER);
+        Animation close = ChatAnimation.create(chat, CHAT, false, 0);
+        close.initialize(100, 100, 100, 100);
+        Transformation frame = new Transformation();
+        close.getTransformation(t, frame);
+        close.getTransformation(t + 34, frame);
+        assertEquals(0f, x(frame), 0.01f);
+        close.getTransformation(t + 51, frame);
+        assertTrue(x(frame) > 0f);
+    }
+
+    @Test public void aChatThatKeepsDrawingLateSlidesAfterAShortWait() {
+        on();
+        long start = SystemClock.uptimeMillis();
+        Animation open = ChatAnimation.create(new Object(), CHAT, true, THREAD_ENTER);
+        open.initialize(100, 100, 100, 100);
+        Transformation frame = new Transformation();
+        // A slow phone drawing every 30 ms never comes on time, so the chat waits off screen only so long.
+        long now = start;
+        for (; now - start < ChatAnimation.WAIT; now += 30) {
+            assertTrue(open.getTransformation(now, frame));
+            assertEquals(100f, x(frame), 0.01f);
+        }
+        // When the wait runs out it slides from the edge, its full length.
+        assertTrue(open.getTransformation(now, frame));
+        assertEquals(100f, x(frame), 0.01f);
+        while (open.getTransformation(now += 30, frame)) {
+            assertTrue(now <= start + ChatAnimation.WAIT + ChatAnimation.SLIDE_IN + 3 * 30);
+        }
+        assertEquals(0f, x(frame), 0.01f);
+    }
+
+    @Test public void aSecondFrameOnTimeFor60HzStillCountsAsAStallAt120() {
+        on();
+        shadowOf(ShadowDisplay.getDefaultDisplay()).setRefreshRate(120f);
+        long t = SystemClock.uptimeMillis();
+        // 20 ms is on time for the wait, which goes by a 60 Hz screen, but it's two of a 120 Hz screen's 8 ms frames
+        // missed, so the slide goes one frame on instead of taking the whole gap at its fastest part.
+        float[] stalled = slideAndPlain(t, t + 20);
+        assertEquals(slideAndPlain(t, t + 8)[1], stalled[0], 0.01f);
+        assertTrue(stalled[0] > stalled[1] + 3);
     }
 
     @Test public void theInboxStaysDrawnUntilTheChatHasSlidOverIt() {
@@ -284,6 +399,18 @@ public class ChatAnimationTest {
         assertTransition(chat, Activity.OVERRIDE_TRANSITION_CLOSE, 103, 102);
         assertTrue(Settings.hookErrors.isEmpty());
         assertTrue(Settings.lastActive("chat_animation") > 0);
+    }
+
+    @Test public void pageAndBusinessChatsSlideInTheirOwnActivityToo() {
+        on();
+        register();
+        ActivityController<ThreadViewActivity> controller = Robolectric.buildActivity(ThreadViewActivity.class);
+        Activity chat = controller.create().start().resume().get();
+        assertTransition(chat, Activity.OVERRIDE_TRANSITION_OPEN, 101, 103);
+        assertTransition(chat, Activity.OVERRIDE_TRANSITION_CLOSE, 103, 102);
+        controller.pause().stop().destroy();
+        assertTrue(ChatAnimation.slidActivities.isEmpty());
+        assertTrue(Settings.hookErrors.isEmpty());
     }
 
     @Test public void chatActivitiesKeepStockWhenOffRestoredOrUnderRemoveAnimations() {

@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -9,10 +10,25 @@ from zipfile import ZipFile
 from scripts import verify_compat_patch as check
 
 
+def setUpModule():
+    # These tests check the plain command lines, so keep this PC's build queue out of them.
+    queue_off = patch.dict(
+        os.environ, {"HUSHMESSENGER_BUILD_WRAPPER": "", "BUILD_QUEUE_SCRIPT": ""}
+    )
+    queue_off.start()
+    unittest.addModuleCleanup(queue_off.stop)
+
+
 class ProfilePatchChecks(unittest.TestCase):
     def test_record_gate_requires_complete_application_and_unchanged_inputs(self):
         cases = (
             "valid",
+            "step_results",
+            "step_results_failed_step",
+            "step_results_no_steps",
+            "desktop_1_19",
+            "desktop_1_19_failed_patch",
+            "desktop_1_19_missing_patch",
             "exit",
             "missing_report",
             "missing_apk",
@@ -104,6 +120,29 @@ class ProfilePatchChecks(unittest.TestCase):
                         report["patchingSteps"][1]["success"] = False
                     if case == "missing_rebuild":
                         report["patchingSteps"].pop()
+                    # Desktop 1.19.0 renamed patchingSteps to stepResults.
+                    if case == "step_results_failed_step":
+                        report["patchingSteps"][1]["success"] = False
+                    if case in ("step_results", "step_results_failed_step"):
+                        report["stepResults"] = report.pop("patchingSteps")
+                    if case == "step_results_no_steps":
+                        report.pop("patchingSteps")
+                    # Desktop 1.19.0 writes PatchEngine.Result: plain names, {name, error} failures, stepResults.
+                    if case.startswith("desktop_1_19"):
+                        report = {
+                            "success": True,
+                            "packageName": "com.facebook.orca",
+                            "packageVersion": "584.0.0.49.98",
+                            "appliedPatches": [p["name"] for p in report["appliedPatches"]],
+                            "failedPatches": [],
+                            "stepResults": [
+                                dict(step, error=None) for step in report["patchingSteps"]
+                            ],
+                        }
+                    if case == "desktop_1_19_failed_patch":
+                        report["failedPatches"] = [{"name": names[0], "error": "boom"}]
+                    if case == "desktop_1_19_missing_patch":
+                        report["appliedPatches"].pop()
                     if case != "missing_report":
                         result.write_text(
                             "{" if case == "bad_json" else json.dumps(report),
@@ -128,7 +167,7 @@ class ProfilePatchChecks(unittest.TestCase):
                     )
 
                 with (
-                    patch.object(check.subprocess, "run", side_effect=run),
+                    patch.object(check, "run_bounded", side_effect=run),
                     patch.object(
                         check,
                         "validate_apk",
@@ -139,7 +178,7 @@ class ProfilePatchChecks(unittest.TestCase):
                         ),
                     ) as validate,
                 ):
-                    if case == "valid":
+                    if case in ("valid", "step_results", "desktop_1_19"):
                         self.assertEqual(
                             "Desktop applied and rebuilt all 2 patches",
                             check.verify(
@@ -165,7 +204,7 @@ class ProfilePatchChecks(unittest.TestCase):
                                 check.digest(apk),
                                 Path("aapt2"),
                             )
-                    if case in ("valid", "malformed_apk"):
+                    if case in ("valid", "step_results", "desktop_1_19", "malformed_apk"):
                         validate.assert_called_once_with(
                             scratch[0] / "patched.apk", Path("java"), Path("aapt2")
                         )
@@ -175,7 +214,7 @@ class ProfilePatchChecks(unittest.TestCase):
 
     def test_empty_or_duplicate_selection_never_launches_desktop(self):
         for names in ([], ["menu", "menu"]):
-            with patch.object(check.subprocess, "run") as run:
+            with patch.object(check, "run_bounded") as run:
                 with self.assertRaises(ValueError):
                     check.verify(
                         Path("stock"),
@@ -192,7 +231,7 @@ class ProfilePatchChecks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "input"
             source.write_bytes(b"changed after discovery")
-            with patch.object(check.subprocess, "run") as run:
+            with patch.object(check, "run_bounded") as run:
                 with self.assertRaisesRegex(
                     ValueError, "changed after compatibility discovery"
                 ):

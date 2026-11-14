@@ -12,7 +12,16 @@ import zlib
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
-PROFILES = Path(__file__).resolve().parent / "profiles"
+if __package__:
+    from . import desktop_result
+    from .build_queue import queued, time_limit
+    from .check_release import run_bounded
+else:
+    import desktop_result
+    from build_queue import queued, time_limit
+    from check_release import run_bounded
+
+PROFILES =Path(__file__).resolve().parent / "profiles"
 
 
 def recorded_builds(directory: Path = PROFILES) -> dict[int, str]:
@@ -24,11 +33,20 @@ def recorded_builds(directory: Path = PROFILES) -> dict[int, str]:
             key, _, value = line.partition(" ")
             if key in ("code", "sha256"):
                 fields[key] = value
-        builds[int(fields["code"])] = fields["sha256"]
+        try:
+            builds[int(fields["code"])] = fields["sha256"]
+        except (KeyError, ValueError) as error:
+            raise ValueError(f"{path.name} is missing a code or sha256 line") from error
     return builds
 
 
-BUILDS = recorded_builds()
+try:
+    BUILDS = recorded_builds()
+    PROFILE_ERROR = None
+except (OSError, ValueError) as error:
+    # A broken record has to read as CHECK FAILED (exit 2) from main, never as a traceback with exit 1.
+    BUILDS = {}
+    PROFILE_ERROR = f"The recorded builds can't be read: {error}"
 STOCK_SHA256 = set(BUILDS.values())
 OLD_LITERAL = b"com.facebook.permission.prod.FB_APP_COMMUNICATION"
 CHANGED_LITERAL = b"com.facebook.permission.proX.FB_APP_COMMUNICATION"
@@ -44,7 +62,7 @@ def altered_dex(data: bytes) -> bytes:
 
 def names_every_build(line: str) -> bool:
     """The DEX-site rejection, naming every recorded build as a supported version code."""
-    match = re.search(r"\bexpected 6 permission loads, found 4\b(.*)", line)
+    match = re.search(r"\bexpected 3 permission loads, found 1\b(.*)", line)
     if match is None:
         return False
     named = {
@@ -90,14 +108,13 @@ def check(args: argparse.Namespace) -> int:
             f"-o={output_apk}",
             str(changed_apk),
         ]
-        run = subprocess.run(
-            command,
+        run = run_bounded(
+            queued(command, "hushmessenger changed APK check"),
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=300,
-            check=False,
+            timeout=time_limit(300),
         )
         log = run.stdout + run.stderr
         if not report_path.is_file():
@@ -109,31 +126,20 @@ def check(args: argparse.Namespace) -> int:
         report = json.loads(report_path.read_text(encoding="utf-8"))
         if not isinstance(report, dict):
             raise TypeError("Desktop did not write a patch result object")
-        failed = report.get("failedPatches")
-        steps = report.get("patchingSteps")
-        if (
-            not isinstance(failed, list)
-            or any(
-                not isinstance(item, dict)
-                or not isinstance(item.get("patch"), dict)
-                or not isinstance(item.get("reason"), str)
-                for item in failed
-            )
-            or not isinstance(steps, list)
-            or any(
-                not isinstance(step, dict)
-                or not isinstance(step.get("step"), str)
-                or not isinstance(step.get("success"), bool)
-                for step in steps
-            )
+        try:
+            failed = desktop_result.failures(report)
+        except ValueError as error:
+            raise ValueError("Desktop wrote an incomplete or malformed patch result") from error
+        steps = desktop_result.steps(report)
+        if not isinstance(steps, list) or any(
+            not isinstance(step, dict)
+            or not isinstance(step.get("step"), str)
+            or not isinstance(step.get("success"), bool)
+            for step in steps
         ):
             raise ValueError("Desktop wrote an incomplete or malformed patch result")
         patch_failure = next(
-            (
-                item
-                for item in failed
-                if item.get("patch", {}).get("name") == "Install beside Meta apps"
-            ),
+            (reason for name, reason in failed if name == "Install beside Meta apps"),
             None,
         )
         if (
@@ -148,13 +154,13 @@ def check(args: argparse.Namespace) -> int:
         reason = next(
             (
                 line.strip()
-                for line in patch_failure["reason"].splitlines()
+                for line in patch_failure.splitlines()
                 if names_every_build(line)
             ),
             None,
         )
         if reason is None:
-            print(patch_failure["reason"].partition("\n")[0].rstrip("\r"))
+            print(patch_failure.partition("\n")[0].rstrip("\r"))
             raise RuntimeError(
                 "failure did not identify the changed permission DEX sites"
             )
@@ -170,6 +176,8 @@ def main() -> int:
     parser.add_argument("--java", type=Path, default=Path("java"))
     args = parser.parse_args()
     try:
+        if PROFILE_ERROR:
+            raise ValueError(PROFILE_ERROR)
         return check(args)
     except subprocess.TimeoutExpired:
         print("CHECK FAILED: Desktop exceeded the 300-second limit.", file=sys.stderr)

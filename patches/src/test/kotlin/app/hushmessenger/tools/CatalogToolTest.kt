@@ -3,6 +3,7 @@ package app.hushmessenger.tools
 import app.morphe.patcher.patch.AppTarget
 import app.morphe.patcher.patch.Compatibility
 import app.morphe.patcher.patch.bytecodePatch
+import app.morphe.patcher.patch.stringOption
 import app.morphe.patcher.patch.resourcePatch
 import app.hushmessenger.patches.controls.fixtureClass
 import app.hushmessenger.patches.controls.fixtureMethod
@@ -16,6 +17,8 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.util.Properties
+import java.util.jar.JarOutputStream
 import java.util.zip.Adler32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
@@ -157,7 +160,7 @@ class CatalogToolTest {
             category("Example")
             dependsOn(dependency)
             compatibleWith(Compatibility("com.example.app", "Example", targets = listOf(
-                AppTarget("580", versionCodes = null, minSdk = 28, description = "346013387, 346013440 and 346013442"),
+                AppTarget("582", versionCodes = null, minSdk = 28, description = "346611369, 346611423 and 346611438"),
             )))
         }
         val catalog = CatalogTool.catalog("1.2.3", setOf(patch))
@@ -172,7 +175,19 @@ class CatalogToolTest {
         assertEquals("Fixture dependency", dependencyEntry.getValue("description").jsonPrimitive.content)
         val target = entry.getValue("compatiblePackages").jsonArray.single().jsonObject.getValue("targets").jsonArray.single().jsonObject
         assertEquals(JsonNull, target.getValue("versionCodes"))
-        assertEquals("346013387, 346013440 and 346013442", target.getValue("description").jsonPrimitive.content)
+        assertEquals("346611369, 346611423 and 346611438", target.getValue("description").jsonPrimitive.content)
+    }
+
+    @Test fun optionsKeepTheirKeyTypeDefaultAndRequirement() {
+        val catalog = CatalogTool.catalog("1", setOf(app.hushmessenger.patches.misc.spoofPackageVersionPatch))
+        val option = catalog.getValue("patches").jsonArray.single().jsonObject.getValue("options").jsonArray.single().jsonObject
+        assertEquals("versionCode", option.getValue("key").jsonPrimitive.content)
+        assertEquals("Version number", option.getValue("title").jsonPrimitive.content)
+        assertEquals("kotlin.Int", option.getValue("type").jsonPrimitive.content)
+        assertEquals(2147483647, option.getValue("default").jsonPrimitive.int)
+        assertTrue(option.getValue("required").jsonPrimitive.boolean)
+        assertEquals(JsonObject(emptyMap()), option.getValue("values"))
+        assertEquals(catalog, Json.parseToJsonElement(catalog.toString()))
     }
 
     @Test fun catalogOrderIsIndependentOfDiscoveryOrder() {
@@ -198,14 +213,202 @@ class CatalogToolTest {
         val patch = root.resolve("patches/src/main/kotlin/app/hushmessenger/patches/controls/MessengerControlsPatch.kt").readText()
         val ui = root.resolve("extensions/messenger/src/main/java/app/hushmessenger/extension/SettingsActivity.java").readText()
         val manifest = root.resolve("extensions/messenger/src/main/AndroidManifest.xml").readText()
-        val names = Regex("""controlPatch\(\s*"[a-z_]+",\s*"([^"]+)"""").findAll(patch)
-            .map { it.groupValues[1] }.toSet() + "Install beside Meta apps" + "Open settings from menu" + "Restore screens on re-signed builds" + "Material You theme" + "View stories anonymously" + "Save any story" + "Slide chats in and out"
-        CatalogTool.validateDefinitions(patch, ui, manifest, names)
+        val names = Regex("""controlPatch\("[a-z_]+",\s*"([^"]+)"""").findAll(patch)
+            .map { it.groupValues[1] }.toSet() + CatalogTool.NON_CONTROL_PATCHES + "Material You theme" + "View stories anonymously" + "Save any story" + "Slide chats in and out" +
+            "Bold and italic text"
+        assertTrue("people" in CatalogTool.validateDefinitions(patch, ui, manifest, names))
         assertFailsWith<IllegalArgumentException> { CatalogTool.validateDefinitions(patch.replace("controlPatch(\"people\"", "controlPatch(\"changed\""), ui, manifest, names) }
+        val constantKey = assertFailsWith<IllegalArgumentException> {
+            CatalogTool.validateDefinitions(patch.replace("controlPatch(\"people\"", "controlPatch(PEOPLE"), ui, manifest, names)
+        }
+        assertContains(constantKey.message!!, "string literal")
         assertFailsWith<IllegalArgumentException> { CatalogTool.validateDefinitions(patch, ui.replace("{\"people\",", "{\"changed\","), manifest, names) }
         assertFailsWith<IllegalArgumentException> { CatalogTool.validateDefinitions(patch, ui, manifest.replace("hush.feature.people", "hush.feature.changed"), names) }
-        assertFailsWith<IllegalArgumentException> { CatalogTool.validateDefinitions(patch, ui, manifest.replace("hush.feature.people", "hush.feature.ads"), names) }
+        assertFailsWith<IllegalArgumentException> { CatalogTool.validateDefinitions(patch, ui, manifest.replace("hush.feature.people", "hush.feature.growth"), names) }
         assertFailsWith<IllegalArgumentException> { CatalogTool.validateDefinitions(patch, ui, manifest.replace("android:value=\"true\"", "android:value=\"false\""), names) }
-        assertFailsWith<IllegalArgumentException> { CatalogTool.validateDefinitions(patch, ui, manifest, names - "Hide inbox ads") }
+        assertFailsWith<IllegalArgumentException> { CatalogTool.validateDefinitions(patch, ui, manifest, names - "Hide Meta AI") }
+        assertFailsWith<IllegalArgumentException> { CatalogTool.validateDefinitions(patch, ui, manifest, names - "Clone install under another package name") }
+    }
+
+    @Test fun stringOptionsAreListedInKeyOrder() {
+        val entry = CatalogTool.catalog("1", setOf(bytecodePatch("Clone", default = false) {
+            stringOption("cloneAppName", "Copy", null, "App name", "The name under the icon.", true) { it != null }
+            stringOption("clonePackageName", "com.example.copy", null, "Package name", "The package name.", true) { it != null }
+        }))["patches"]!!.jsonArray.single().jsonObject
+        assertEquals(false, entry["default"]!!.jsonPrimitive.boolean)
+        assertEquals(listOf("cloneAppName", "clonePackageName"), entry["options"]!!.jsonArray.map { it.jsonObject["key"]!!.jsonPrimitive.content })
+        assertEquals(JsonObject(linkedMapOf(
+            "key" to JsonPrimitive("clonePackageName"),
+            "title" to JsonPrimitive("Package name"),
+            "description" to JsonPrimitive("The package name."),
+            "required" to JsonPrimitive(true),
+            "type" to JsonPrimitive("kotlin.String"),
+            "default" to JsonPrimitive("com.example.copy"),
+            "values" to JsonObject(emptyMap()),
+        )), entry["options"]!!.jsonArray[1])
+        assertFailsWith<IllegalArgumentException> {
+            CatalogTool.catalog("1", setOf(bytecodePatch("Untitled") { stringOption("bare", "a", null, null, null, false) }))
+        }
+    }
+
+    private fun dex(vararg classes: com.android.tools.smali.dexlib2.iface.ClassDef): ByteArray {
+        val store = MemoryDataStore()
+        DexPool.writeTo(store, ImmutableDexFile(Opcodes.getDefault(), classes.toList()))
+        return store.data.copyOf().also { store.close() }
+    }
+
+    private val logoCall = "Lapp/hushmessenger/extension/Settings;->logoLongPressed(Landroid/content/Context;)V"
+
+    /** Patch code naming one extension method and two control keys, as the built patches' hook code does. */
+    private fun patcherDex(vararg strings: String) = dex(fixtureClass("Lapp/hushmessenger/patches/Fixture;", listOf(
+        fixtureMethod("Lapp/hushmessenger/patches/Fixture;->hook()V",
+            strings.joinToString("\n") { "const-string v0, \"$it\"" } + "\nreturn-void", 1))))
+
+    private fun extensionDex(method: String = "logoLongPressed", vararg keys: String) = dex(fixtureClass(
+        "Lapp/hushmessenger/extension/Settings;", listOf(fixtureMethod(
+            "Lapp/hushmessenger/extension/Settings;->$method(Landroid/content/Context;)V",
+            keys.joinToString("\n") { "const-string v0, \"$it\"" } + "\nreturn-void", 2))))
+
+    /**
+     * A structurally sound extension still has to be this bundle's: one with nothing of HushMessenger's, one missing a
+     * method the hooks call and an older one missing a current control are all turned down.
+     */
+    @Test fun thePackagedExtensionMustHaveWhatThePatchesCall() {
+        val keys = setOf("people", "ads")
+        val patcher = patcherDex("invoke-static/range {p1 .. p1}, $logoCall", "people", "ads")
+        val extension = extensionDex("logoLongPressed", "people", "ads")
+        for (data in listOf(patcher, extension)) assertTrue(CatalogTool.validateDex(data) > 0)
+        // The method reference and its class.
+        assertEquals(2, CatalogTool.validateExtensionContract(patcher, extension, keys))
+        val unrelated = assertFailsWith<IllegalArgumentException> { CatalogTool.validateExtensionContract(patcher, patcher, keys) }
+        assertEquals("The extension has no Lapp/hushmessenger/extension/Settings;", unrelated.message)
+        val missing = assertFailsWith<IllegalArgumentException> {
+            CatalogTool.validateExtensionContract(patcher, extensionDex("settingsOpened", "people", "ads"), keys)
+        }
+        assertEquals("The extension has no $logoCall", missing.message)
+        val older = assertFailsWith<IllegalArgumentException> {
+            CatalogTool.validateExtensionContract(patcher, extensionDex("logoLongPressed", "people"), keys)
+        }
+        assertEquals("The extension has no ads control", older.message)
+        val stale = assertFailsWith<IllegalArgumentException> {
+            CatalogTool.validateExtensionContract(patcherDex("invoke-static/range {p1 .. p1}, $logoCall", "people"), extension, keys)
+        }
+        assertEquals("The patcher DEX has no ads control", stale.message)
+        val nothing = assertFailsWith<IllegalArgumentException> {
+            CatalogTool.validateExtensionContract(patcherDex("people", "ads"), extension, keys)
+        }
+        assertEquals("The patcher DEX names no extension code", nothing.message)
+    }
+
+    /** A getter joined on at patch time never sits in the DEX whole, so the check refuses it instead of passing it by. */
+    @Test fun anExtensionReferenceFinishedAtPatchTimeIsRefused() {
+        val keys = setOf("people")
+        val extension = extensionDex("logoLongPressed", "people")
+        for (joined in listOf("invoke-static {}, Lapp/hushmessenger/extension/Settings;->",
+            "sget v0, Lapp/hushmessenger/extension/MaterialYouTheme;-> v1")) {
+            val refused = assertFailsWith<IllegalArgumentException>(joined) {
+                CatalogTool.validateExtensionContract(patcherDex("invoke-static/range {p1 .. p1}, $logoCall", joined, "people"), extension, keys)
+            }
+            assertTrue(refused.message!!.endsWith("at patch time, so it can't be checked"), refused.message)
+        }
+        // A whole member right after the arrow is an ordinary reference.
+        assertEquals(2, CatalogTool.validateExtensionContract(patcherDex("invoke-static/range {p1 .. p1}, $logoCall", "people"), extension, keys))
+    }
+
+    @Test fun everyPatchClassInTheJarIsInThePatcherDex() {
+        val patcher = patcherDex("people")
+        CatalogTool.validatePatcherClasses(listOf("app/hushmessenger/patches/Fixture.class"), patcher)
+        assertFailsWith<IllegalArgumentException> {
+            CatalogTool.validatePatcherClasses(listOf("app/hushmessenger/patches/Fixture.class", "app/hushmessenger/patches/Newer.class"), patcher)
+        }
+        assertFailsWith<IllegalArgumentException> { CatalogTool.validatePatcherClasses(emptyList(), patcher) }
+    }
+
+    /** Missing on both sides is no match, so the catalog check can't call a bundle fresh by comparing nothing. */
+    @Test fun aBundleAndSourceBothWithoutATimestampAreRefused() {
+        CatalogTool.requireBundleTimestamp("1790552148000", "1790552148000")
+        val missing = assertFailsWith<IllegalArgumentException> { CatalogTool.requireBundleTimestamp(null, null) }
+        assertEquals("Source has no bundle timestamp", missing.message)
+        val differs = assertFailsWith<IllegalArgumentException> { CatalogTool.requireBundleTimestamp(null, "1790552148000") }
+        assertEquals("Bundle timestamp differs from source", differs.message)
+        assertFailsWith<IllegalArgumentException> { CatalogTool.requireBundleTimestamp("", "") }
+    }
+
+    /** The manifest has to carry this source's timestamp and version, and a bundle and source that both lack a timestamp don't match. */
+    @Test fun theBundleManifestMustMatchTheSource() {
+        fun manifest(vararg pairs: Pair<String, String>) = java.util.jar.Manifest().apply {
+            for ((name, value) in pairs) mainAttributes.putValue(name, value)
+        }
+        fun source(vararg pairs: Pair<String, String>) = java.util.Properties().apply { for ((name, value) in pairs) setProperty(name, value) }
+        val fresh = manifest("Version" to "0.25.0", "Timestamp" to "1790552148000")
+        assertEquals("0.25.0", CatalogTool.requireBundleMatchesSource(fresh,
+            source("version" to "0.25.0", "bundleTimestampMillis" to "1790552148000")))
+        val neither = assertFailsWith<IllegalArgumentException> {
+            CatalogTool.requireBundleMatchesSource(manifest("Version" to "0.25.0"), source("version" to "0.25.0"))
+        }
+        assertEquals("Source has no bundle timestamp", neither.message)
+        val stale = assertFailsWith<IllegalArgumentException> {
+            CatalogTool.requireBundleMatchesSource(manifest("Version" to "0.25.0"),
+                source("version" to "0.25.0", "bundleTimestampMillis" to "1790552148000"))
+        }
+        assertEquals("Bundle timestamp differs from source", stale.message)
+        val older = assertFailsWith<IllegalArgumentException> {
+            CatalogTool.requireBundleMatchesSource(fresh, source("version" to "0.26.0", "bundleTimestampMillis" to "1790552148000"))
+        }
+        assertEquals("Bundle version differs from source", older.message)
+        assertFailsWith<IllegalArgumentException> {
+            CatalogTool.requireBundleMatchesSource(manifest("Timestamp" to "1790552148000"), source("bundleTimestampMillis" to "1790552148000"))
+        }
+    }
+
+    /** The check reads its bundle through readBundle, so a stale, unstamped, older or manifest-less bundle is refused there. */
+    @Test fun theCatalogCheckReadsOnlyABundleBuiltFromThisSource(@TempDir temporary: Path) {
+        val patcher = patcherDex("people")
+        val extension = extensionDex("logoLongPressed", "people")
+        fun bundle(name: String, vararg attributes: Pair<String, String>): File {
+            val file = temporary.resolve(name).toFile()
+            file.outputStream().use { out ->
+                val zip = if (attributes.isEmpty()) ZipOutputStream(out) else JarOutputStream(out, java.util.jar.Manifest().apply {
+                    mainAttributes.putValue("Manifest-Version", "1.0")
+                    for ((key, value) in attributes) mainAttributes.putValue(key, value)
+                })
+                zip.use {
+                    for ((entry, data) in listOf("classes.dex" to patcher, "extensions/messenger.mpe" to extension,
+                        "app/hushmessenger/patches/Fixture.class" to ByteArray(4))) {
+                        it.putNextEntry(ZipEntry(entry))
+                        it.write(data)
+                        it.closeEntry()
+                    }
+                }
+            }
+            return file
+        }
+        val source = Properties().apply { setProperty("version", "0.25.0"); setProperty("bundleTimestampMillis", "1790552148000") }
+        val read = CatalogTool.readBundle(bundle("fresh.mpp", "Version" to "0.25.0", "Timestamp" to "1790552148000"), source)
+        assertEquals("0.25.0", read.version)
+        assertEquals(listOf("app/hushmessenger/patches/Fixture.class"), read.patchClasses)
+        assertContentEquals(patcher, read.patcherDex)
+        assertContentEquals(extension, read.extensionDex)
+        for ((name, attributes, message) in listOf(
+            Triple("stale.mpp", arrayOf("Version" to "0.25.0", "Timestamp" to "1790000000000"), "Bundle timestamp differs from source"),
+            Triple("unstamped.mpp", arrayOf("Version" to "0.25.0"), "Bundle timestamp differs from source"),
+            Triple("older.mpp", arrayOf("Version" to "0.24.0", "Timestamp" to "1790552148000"), "Bundle version differs from source"),
+            Triple("bare.mpp", emptyArray<Pair<String, String>>(), "Bundle has no manifest"),
+        )) {
+            val refused = assertFailsWith<IllegalArgumentException>(name) { CatalogTool.readBundle(bundle(name, *attributes), source) }
+            assertEquals(message, refused.message, name)
+        }
+        // A source without its own stamp matches nothing, not even a bundle that also has none.
+        val unstamped = Properties().apply { setProperty("version", "0.25.0") }
+        val neither = assertFailsWith<IllegalArgumentException> { CatalogTool.readBundle(bundle("neither.mpp", "Version" to "0.25.0"), unstamped) }
+        assertEquals("Source has no bundle timestamp", neither.message)
+    }
+
+    /** A run that refuses its bundle, however early, leaves no success receipt from an earlier run behind. */
+    @Test fun aRefusedBundleLeavesNoReceipt(@TempDir temporary: Path) {
+        val receipt = temporary.resolve("catalog-evidence.json").toFile()
+        receipt.writeText("{\"dexValidated\":true}\n")
+        assertFails { CatalogTool.main(arrayOf("check", temporary.resolve("missing.mpp").toString(), temporary.toString(), receipt.path)) }
+        assertFalse(receipt.exists())
     }
 }

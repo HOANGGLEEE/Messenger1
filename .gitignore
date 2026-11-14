@@ -11,6 +11,11 @@
 *.mpp
 *.keystore
 *.jks
+morphe-signing.key
+*.pem
+*.key
+*.p12
+*.pfx
 __pycache__/
 *.pyc
 *.class
@@ -25,4 +30,4 @@ CODEX_CHANGELOG.md
 !README.md
 !CHANGELOG.md
 .ruff_cache/
-.secrets/
+.mockups/

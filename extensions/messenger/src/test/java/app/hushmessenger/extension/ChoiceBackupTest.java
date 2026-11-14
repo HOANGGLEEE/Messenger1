@@ -12,6 +12,7 @@ import android.os.ParcelFileDescriptor;
 import android.os.Bundle;
 import android.os.Looper;
 import android.view.View;
+import android.widget.TextView;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -37,17 +38,20 @@ import org.robolectric.shadows.ShadowToast;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = {28, 29, 36}, shadows = {ChoiceBackupTest.DocumentResolver.class, ChoiceBackupTest.SeekableDescriptor.class, ChoiceBackupTest.SeekableOs.class})
+@Config(sdk = {28, 29, 36}, shadows = {ChoiceBackupTest.DocumentResolver.class, ChoiceBackupTest.SeekableDescriptor.class, ChoiceBackupTest.SeekableOs.class, ChoiceBackupTest.MediaDocuments.class})
 public class ChoiceBackupTest {
     @Before public void reset() {
         Settings.initialize(RuntimeEnvironment.getApplication());
         Settings.preferences.edit().clear().commit();
+        OpenSections.all();
         CrashGuard.resetForTests();
         DocumentResolver.opener = null;
         DocumentResolver.onOpen = null;
+        DocumentResolver.query = null;
+        MediaDocuments.alias = null;
         SeekableDescriptor.files.clear();
         SeekableOs.errno = 0;
-        SettingsActivity.documentTimeoutMillis = 30_000;
+        ChoicesBackup.documentTimeoutMillis = 30_000;
     }
 
     /** Keep the original stream fault fixtures while exercising cancellable descriptor opens. */
@@ -55,6 +59,15 @@ public class ChoiceBackupTest {
     public static class DocumentResolver extends ShadowContentResolver {
         static java.util.function.BiFunction<Uri, CancellationSignal, AssetFileDescriptor> opener;
         static java.util.function.Consumer<CancellationSignal> onOpen;
+        static java.util.function.BiFunction<Uri, CancellationSignal, android.database.Cursor> query;
+
+        @Implementation protected android.database.Cursor query(Uri uri, String[] projection, String selection,
+                String[] selectionArgs, String sortOrder, CancellationSignal signal) {
+            assertArrayEquals(new String[] {"owner_package_name"}, projection);
+            assertNotNull(signal);
+            signal.throwIfCanceled();
+            return query == null ? null : query.apply(uri, signal);
+        }
 
         @Implementation protected AssetFileDescriptor openAssetFileDescriptor(Uri uri, String mode, CancellationSignal signal)
                 throws java.io.FileNotFoundException {
@@ -97,6 +110,15 @@ public class ChoiceBackupTest {
                     }
                 };
             } catch (java.io.IOException error) { throw new java.io.FileNotFoundException("Fixture descriptor failed"); }
+        }
+    }
+
+    /** The system provider bridge is outside these in-process document fixtures. */
+    @Implements(android.provider.MediaStore.class)
+    public static class MediaDocuments {
+        static Uri alias;
+        @Implementation(minSdk = 29) protected static Uri getMediaUri(android.content.Context context, Uri document) {
+            return alias;
         }
     }
 
@@ -165,7 +187,7 @@ public class ChoiceBackupTest {
                 clipboard(raw);
                 screen.get().getWindow().getDecorView().findViewWithTag("import_choices").performClick();
                 assertEquals(raw.substring(0, Math.min(60, raw.length())), before, Settings.preferences.getAll());
-                assertTrue(ShadowToast.getTextOfLatestToast().startsWith("Not a valid"));
+                assertTrue(ShadowToast.getTextOfLatestToast().startsWith("Not a choices backup"));
             }
         }
     }
@@ -180,12 +202,123 @@ public class ChoiceBackupTest {
             assertTrue(Settings.preferences.getBoolean("people", false));
             assertTrue(Settings.preferences.getBoolean("typing", false));
             assertFalse(Settings.preferences.contains("new_control"));
-            assertEquals("Restored 1 choice Skipped 1 unknown choice. Skipped 1 choice absent from this bundle.", ShadowToast.getTextOfLatestToast());
+            // Android 12+ cuts a toast after two lines, so the skips go on the card instead of off the end of the toast.
+            assertEquals("Restored 1 choice.", ShadowToast.getTextOfLatestToast());
+            TextView result = screen.get().getWindow().getDecorView().findViewWithTag("choices_restore_status");
+            assertEquals(View.VISIBLE, result.getVisibility());
+            assertEquals("Restored 1 choice. Skipped 1 choice this version doesn't know. Skipped 1 choice whose patch isn't installed.", result.getText().toString());
             Map<String, ?> before = Settings.preferences.getAll();
             clipboard(ChoiceCodec.HEADER + "\nnew_control=false\n");
             screen.get().getWindow().getDecorView().findViewWithTag("import_choices").performClick();
             assertEquals(before, Settings.preferences.getAll());
-            assertTrue(ShadowToast.getTextOfLatestToast().startsWith("No installed"));
+            assertEquals("Nothing to restore. None of those match your patches.", ShadowToast.getTextOfLatestToast());
+            assertEquals("Nothing to restore. None of those match your patches. Skipped 1 choice this version doesn't know.", result.getText().toString());
+            assertEquals(View.VISIBLE, result.getVisibility());
+            // A backup that can't be read leaves no earlier result standing under the buttons.
+            clipboard("not a backup");
+            screen.get().getWindow().getDecorView().findViewWithTag("import_choices").performClick();
+            assertEquals(View.GONE, result.getVisibility());
+        }
+    }
+
+    /** With every note at once, the toast still fits the two lines Android 12+ shows, and the card holds the rest. */
+    @Test public void aRestoreWithEveryNoteKeepsItsToastToTwoLines() {
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            java.util.Set<String> installed = new HashSet<>(Set.of(AutoReply.KEY));
+            StringBuilder backup = new StringBuilder(ChoiceCodec.HEADER + "\npaused=true\nauto_reply=true\n");
+            // Eleven switches and the pause: a two-digit count, as long as a real backup's gets.
+            int restored = 0;
+            for (String[] control : SettingsActivity.CONTROLS) {
+                if (restored == 11 || control[0].equals(AutoReply.KEY)) continue;
+                installed.add(control[0]);
+                backup.append(control[0]).append("=false\n");
+                restored++;
+            }
+            backup.append("people_extra=true\nnew_control=true\n");
+            Settings.installed = installed;
+            String missing = java.util.Arrays.stream(SettingsActivity.CONTROLS).map(c -> c[0])
+                .filter(key -> !installed.contains(key)).findFirst().orElseThrow();
+            backup.append(missing).append("=true\n");
+            clipboard(backup.toString());
+            screen.get().getWindow().getDecorView().findViewWithTag("import_choices").performClick();
+            String toast = ShadowToast.getTextOfLatestToast();
+            // The eleven switches restore off, as they already were, and the pause has its own sentence.
+            assertEquals("None of your choices changed. Changes paused.", toast);
+            assertTrue(toast, ToastLengthTest.lines(toast) <= 2);
+            TextView result = screen.get().getWindow().getDecorView().findViewWithTag("choices_restore_status");
+            SettingsText words = new SettingsText(screen.get());
+            assertEquals(toast + " " + words.get("import_auto_reply_off") + " " + words.count("import_unknown", 2) + " " +
+                words.count("import_unavailable", 1), result.getText().toString());
+            assertTrue(result.getText().toString(), ToastLengthTest.lines(result.getText().toString()) > 2);
+        }
+    }
+
+    /** A backup's values often match this phone's already, so the restore counts only the choices it changed. */
+    @Test public void aRestoreCountsOnlyTheChoicesItChanged() {
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            Settings.installed = new HashSet<>(Set.of("stories", "typing", "people"));
+            Settings.preferences.edit().putBoolean("stories", true).commit();
+            clipboard(ChoiceCodec.HEADER + "\nstories=true\ntyping=false\n");
+            screen.get().getWindow().getDecorView().findViewWithTag("import_choices").performClick();
+            assertEquals("Your choices already match that backup.", ShadowToast.getTextOfLatestToast());
+            clipboard(ChoiceCodec.HEADER + "\nstories=true\ntyping=true\npeople=false\n");
+            screen.get().getWindow().getDecorView().findViewWithTag("import_choices").performClick();
+            assertTrue(Settings.preferences.getBoolean("typing", false));
+            assertEquals("Restored 1 of 3 choices.", ShadowToast.getTextOfLatestToast());
+            clipboard(ChoiceCodec.HEADER + "\nstories=false\ntyping=false\n");
+            screen.get().getWindow().getDecorView().findViewWithTag("import_choices").performClick();
+            assertFalse(Settings.preferences.getBoolean("stories", true));
+            assertEquals("Restored 2 choices.", ShadowToast.getTextOfLatestToast());
+
+            // A skipped entry or a pause the backup lifts means the backup and this phone don't match after all.
+            clipboard(ChoiceCodec.HEADER + "\nstories=false\nnew_control=true\n");
+            screen.get().getWindow().getDecorView().findViewWithTag("import_choices").performClick();
+            assertEquals("None of your choices changed.", ShadowToast.getTextOfLatestToast());
+            Settings.preferences.edit().putBoolean("paused", true).commit();
+            clipboard(ChoiceCodec.HEADER + "\nstories=false\npaused=false\n");
+            screen.get().getWindow().getDecorView().findViewWithTag("import_choices").performClick();
+            assertFalse(Settings.preferences.getBoolean("paused", true));
+            assertEquals("None of your choices changed. Changes resumed.", ShadowToast.getTextOfLatestToast());
+            screen.get().getWindow().getDecorView().findViewWithTag("import_choices").performClick();
+            assertEquals("Your choices already match that backup.", ShadowToast.getTextOfLatestToast());
+        }
+    }
+
+    /**
+     * A backup carries Auto reply's switch but not its replies, so restoring it on would start this phone's own replies.
+     * The switch stays off, this phone's replies and group choice are kept, and the toast says why. Off still applies.
+     */
+    @Test public void aRestoredBackupNeverTurnsOnThisPhonesAutoReplies() {
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            Settings.installed = new HashSet<>(Set.of("stories", AutoReply.KEY));
+            AutoReply.save(Settings.preferences, java.util.List.of(new AutoReply.Rule("", "Not this one")), true);
+            String rules = Settings.preferences.getString(AutoReply.RULES, null);
+            String notice = new SettingsText(screen.get()).get("import_auto_reply_off");
+            clipboard(ChoiceCodec.HEADER + "\nstories=true\nauto_reply=true\n");
+            screen.get().getWindow().getDecorView().findViewWithTag("import_choices").performClick();
+            assertTrue(Settings.preferences.getBoolean("stories", false));
+            assertFalse(Settings.preferences.getBoolean(AutoReply.KEY, false));
+            assertEquals(rules, Settings.preferences.getString(AutoReply.RULES, null));
+            assertTrue(Settings.preferences.getBoolean(AutoReply.GROUPS, false));
+            assertEquals("Restored 1 choice.", ShadowToast.getTextOfLatestToast());
+            TextView result = screen.get().getWindow().getDecorView().findViewWithTag("choices_restore_status");
+            assertEquals(View.VISIBLE, result.getVisibility());
+            assertEquals("Restored 1 choice. " + notice, result.getText().toString());
+
+            clipboard(ChoiceCodec.HEADER + "\nauto_reply=true\n");
+            screen.get().getWindow().getDecorView().findViewWithTag("import_choices").performClick();
+            assertFalse(Settings.preferences.getBoolean(AutoReply.KEY, false));
+            assertEquals(notice, ShadowToast.getTextOfLatestToast());
+            // The notice is the whole result, so the toast says all of it and the card line goes away.
+            assertEquals(View.GONE, result.getVisibility());
+
+            Settings.preferences.edit().putBoolean(AutoReply.KEY, true).commit();
+            clipboard(ChoiceCodec.HEADER + "\nauto_reply=false\n");
+            screen.get().getWindow().getDecorView().findViewWithTag("import_choices").performClick();
+            assertFalse(Settings.preferences.getBoolean(AutoReply.KEY, false));
+            assertEquals("Restored 1 choice.", ShadowToast.getTextOfLatestToast());
+            assertEquals(View.GONE, result.getVisibility());
+            assertEquals(rules, Settings.preferences.getString(AutoReply.RULES, null));
         }
     }
 
@@ -276,7 +409,8 @@ public class ChoiceBackupTest {
                     () -> { throw new SecurityException("Refused"); });
                 ShadowToast.reset();
                 activity.onActivityResult(SettingsActivity.READ_CHOICES, Activity.RESULT_OK, new Intent().setData(uri));
-                awaitToast("Not a valid");
+                // A document that can't be read gets different advice from one that isn't a backup.
+                awaitToast("unreadable".equals(data) ? "Couldn't read that file" : "Not a choices backup");
                 assertEquals(before, Settings.preferences.getAll());
             }
         }
@@ -303,12 +437,12 @@ public class ChoiceBackupTest {
             Uri uri = Uri.fromFile(file);
             activity.getWindow().getDecorView().findViewWithTag("read_choices_file").performClick();
             activity.onActivityResult(SettingsActivity.READ_CHOICES, Activity.RESULT_OK, new Intent().setData(uri));
-            awaitToast("Not a valid");
+            awaitToast("Couldn't read that file");
             assertEquals(before, Settings.preferences.getAll());
             ShadowToast.reset();
             activity.getWindow().getDecorView().findViewWithTag("save_choices_file").performClick();
             activity.onActivityResult(SettingsActivity.SAVE_CHOICES, Activity.RESULT_OK, new Intent().setData(uri));
-            awaitToast("Couldn't export");
+            awaitToast("Couldn't save your choices to the file");
             assertArrayEquals(original, Files.readAllBytes(file.toPath()));
         }
     }
@@ -322,7 +456,7 @@ public class ChoiceBackupTest {
                 () -> { throw new IllegalStateException("private provider details"); });
             activity.getWindow().getDecorView().findViewWithTag("read_choices_file").performClick();
             activity.onActivityResult(SettingsActivity.READ_CHOICES, Activity.RESULT_OK, new Intent().setData(uri));
-            awaitToast("Not a valid");
+            awaitToast("Couldn't read that file");
             assertEquals(before, Settings.preferences.getAll());
             assertTrue(org.robolectric.shadows.ShadowLog.getLogsForTag("HushMessenger").stream()
                 .noneMatch(log -> log.throwable != null && "private provider details".equals(log.throwable.getMessage())));
@@ -349,11 +483,11 @@ public class ChoiceBackupTest {
             Map<String, ?> before = Settings.preferences.getAll();
             activity.getWindow().getDecorView().findViewWithTag("read_choices_file").performClick();
             activity.onActivityResult(SettingsActivity.READ_CHOICES, Activity.RESULT_OK, new Intent().setData(uri));
-            awaitToast("Not a valid");
+            awaitToast("Couldn't read that file");
             assertEquals(before, Settings.preferences.getAll());
             activity.getWindow().getDecorView().findViewWithTag("save_choices_file").performClick();
             activity.onActivityResult(SettingsActivity.SAVE_CHOICES, Activity.RESULT_OK, new Intent().setData(uri));
-            awaitToast("Couldn't export");
+            awaitToast("Couldn't save your choices to the file");
             assertEquals(0, output.size());
         }
     }
@@ -387,14 +521,54 @@ public class ChoiceBackupTest {
                 ShadowToast.reset();
                 activity.getWindow().getDecorView().findViewWithTag("read_choices_file").performClick();
                 activity.onActivityResult(SettingsActivity.READ_CHOICES, Activity.RESULT_OK, new Intent().setData(uri));
-                awaitToast("Not a valid");
+                awaitToast("Couldn't read that file");
                 assertEquals(before, Settings.preferences.getAll());
                 assertEquals(0, reads.get());
                 ShadowToast.reset();
                 activity.getWindow().getDecorView().findViewWithTag("save_choices_file").performClick();
                 activity.onActivityResult(SettingsActivity.SAVE_CHOICES, Activity.RESULT_OK, new Intent().setData(uri));
-                awaitToast("Couldn't export");
+                awaitToast("Couldn't save your choices to the file");
                 assertEquals(0, output.size());
+            }
+        }
+    }
+
+    @Test public void mediaDestinationsRequireKnownForeignOwnershipBeforeOpeningForWrite() throws Exception {
+        for (String authority : new String[] {"media", "0@media", "com.android.providers.media.documents", "com.android.externalstorage.documents"}) {
+            for (String owner : new String[] {RuntimeEnvironment.getApplication().getPackageName(), "org.example.files", "", "missing", "error"}) {
+                try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+                    Uri uri = Uri.parse("content://" + authority + "/document/17");
+                    Uri media = authority.endsWith("media") ? uri : Uri.parse("content://media/external/file/17");
+                    MediaDocuments.alias = media;
+                    var queries = new java.util.concurrent.atomic.AtomicInteger();
+                    var opens = new java.util.concurrent.atomic.AtomicInteger();
+                    var cursor = new android.database.MatrixCursor(new String[] {"owner_package_name"});
+                    if (!owner.equals("missing")) cursor.addRow(new Object[] {owner.isEmpty() ? null : owner});
+                    DocumentResolver.query = (requested, signal) -> {
+                        assertEquals(media, requested);
+                        queries.incrementAndGet();
+                        if (owner.equals("error")) throw new SecurityException("Unavailable owner");
+                        return cursor;
+                    };
+                    byte[] original = "existing Messenger content".getBytes(StandardCharsets.UTF_8);
+                    ByteArrayOutputStream output = new ByteArrayOutputStream();
+                    output.write(original);
+                    DocumentResolver.onOpen = signal -> { opens.incrementAndGet(); output.reset(); };
+                    Shadows.shadowOf(screen.get().getContentResolver()).registerOutputStream(uri, output);
+                    // API 28 has no ownership column or document-to-media bridge.
+                    boolean ordinaryOldDocument = android.os.Build.VERSION.SDK_INT == 28 && authority.equals("com.android.externalstorage.documents");
+                    boolean allowed = ordinaryOldDocument || android.os.Build.VERSION.SDK_INT >= 29 && owner.equals("org.example.files");
+                    startFile(screen.get(), true, uri);
+                    awaitToast(allowed ? "Choices file saved" : "Couldn't save your choices to the file");
+                    finishWorkers();
+                    assertEquals(allowed ? 1 : 0, opens.get());
+                    if (!allowed) assertArrayEquals(original, output.toByteArray());
+                    else assertEquals(ChoiceCodec.encode(Settings.preferences, Settings.installed), output.toString(StandardCharsets.UTF_8));
+                    if (android.os.Build.VERSION.SDK_INT >= 29) {
+                        assertEquals(1, queries.get());
+                        if (!owner.equals("error")) assertTrue(cursor.isClosed());
+                    } else assertEquals(0, queries.get());
+                }
             }
         }
     }
@@ -550,7 +724,7 @@ public class ChoiceBackupTest {
             }
             return null;
         };
-        SettingsActivity.documentTimeoutMillis = 50;
+        ChoicesBackup.documentTimeoutMillis = 50;
         try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
             SettingsActivity activity = screen.get();
             View root = activity.getWindow().getDecorView();
@@ -560,7 +734,9 @@ public class ChoiceBackupTest {
             while (opens.get() == 0 && System.nanoTime() < until) Thread.sleep(10);
             assertEquals(1, opens.get());
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(51, TimeUnit.MILLISECONDS);
-            assertTrue(((android.widget.TextView) root.findViewWithTag("choices_file_status")).getText().toString().contains("too long"));
+            // A read that ran out of time left the choices alone. Only a save can leave a cut-off file.
+            assertEquals("Took too long. Your choices didn't change. Try again.",
+                ((android.widget.TextView) root.findViewWithTag("choices_file_status")).getText().toString());
             assertTrue(root.findViewWithTag("read_choices_file").isEnabled());
             startFile(activity, false, uri);
             assertTrue(started.await(5, TimeUnit.SECONDS));
@@ -575,12 +751,13 @@ public class ChoiceBackupTest {
             Shadows.shadowOf(activity.getContentResolver()).registerInputStream(uri,
                 new ByteArrayInputStream((ChoiceCodec.HEADER + "\npaused=true\n").getBytes(StandardCharsets.UTF_8)));
             startFile(activity, false, uri);
-            awaitToast("Restored 1 choice");
+            // The backup only pauses, and the pause isn't a choice.
+            awaitToast("None of your choices changed. Changes paused.");
             assertTrue(Settings.preferences.getBoolean("paused", false));
         } finally {
             release.countDown();
             finishWorkers();
-            SettingsActivity.documentTimeoutMillis = 30_000;
+            ChoicesBackup.documentTimeoutMillis = 30_000;
         }
     }
 
@@ -609,13 +786,12 @@ public class ChoiceBackupTest {
             Settings.installed = new HashSet<>(Set.of("stories"));
             startFile(activity, false, uri);
             assertTrue(started.await(5, TimeUnit.SECONDS));
-            var field = SettingsActivity.class.getDeclaredField("documentJob");
-            field.setAccessible(true);
-            Object job = field.get(activity);
+            Object backup = org.robolectric.util.ReflectionHelpers.getField(activity, "backup");
+            Object job = org.robolectric.util.ReflectionHelpers.getField(backup, "documentJob");
             var ownerField = job.getClass().getDeclaredField("owner");
             ownerField.setAccessible(true);
             var owner = (java.lang.ref.WeakReference<?>) ownerField.get(job);
-            assertSame(activity, owner.get());
+            assertSame(backup, owner.get());
             screen.pause().stop().destroy();
             assertNull(owner.get());
             assertTrue(canceled.await(5, TimeUnit.SECONDS));
@@ -649,7 +825,8 @@ public class ChoiceBackupTest {
                 DocumentResolver.onOpen = signal -> signal.setOnCancelListener(() -> canceled.set(true));
                 startFile(original, true, uri);
                 assertTrue(started.await(5, TimeUnit.SECONDS));
-                Object job = org.robolectric.util.ReflectionHelpers.getField(original, "documentJob");
+                Object job = org.robolectric.util.ReflectionHelpers.getField(
+                    org.robolectric.util.ReflectionHelpers.getField(original, "backup"), "documentJob");
                 java.lang.ref.WeakReference<?> owner = org.robolectric.util.ReflectionHelpers.getField(job, "owner");
                 if (rotate) screen.recreate();
                 else screen.pause().stop().destroy();
@@ -665,7 +842,7 @@ public class ChoiceBackupTest {
 
     @Test public void aDetachedSaveStillTimesOutAndReportsTheIncompleteFile() throws Exception {
         CountDownLatch started = new CountDownLatch(1), canceled = new CountDownLatch(1);
-        SettingsActivity.documentTimeoutMillis = 100;
+        ChoicesBackup.documentTimeoutMillis = 100;
         DocumentResolver.onOpen = signal -> {
             signal.setOnCancelListener(canceled::countDown);
             started.countDown();
@@ -681,8 +858,8 @@ public class ChoiceBackupTest {
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(101));
             assertTrue(canceled.await(5, TimeUnit.SECONDS));
             finishWorkers();
-            assertEquals("The file operation took too long. Try again. A save may leave an incomplete file.", ShadowToast.getTextOfLatestToast());
-        } finally { canceled.countDown(); finishWorkers(); SettingsActivity.documentTimeoutMillis = 30_000; }
+            assertEquals("Took too long. A saved file may be cut off. Try again.", ShadowToast.getTextOfLatestToast());
+        } finally { canceled.countDown(); finishWorkers(); ChoicesBackup.documentTimeoutMillis = 30_000; }
     }
 
     @Test public void realDescriptorSlicesPreserveInputAndOutputBoundaries() throws Exception {
@@ -724,7 +901,7 @@ public class ChoiceBackupTest {
              ParcelFileDescriptor descriptor = ParcelFileDescriptor.open(file.toFile(), ParcelFileDescriptor.MODE_READ_WRITE)) {
             DocumentResolver.opener = (uri, signal) -> new AssetFileDescriptor(descriptor, 7, 5);
             startFile(screen.get(), true, Uri.parse("content://choices/short-slice"));
-            awaitToast("Couldn't export");
+            awaitToast("Couldn't save your choices to the file");
             finishWorkers();
             assertArrayEquals(original, Files.readAllBytes(file));
         } finally { Files.deleteIfExists(file); }
@@ -764,14 +941,28 @@ public class ChoiceBackupTest {
             SeekableOs.errno = android.system.OsConstants.EBADF;
             DocumentResolver.opener = (uri, signal) -> new AssetFileDescriptor(descriptor, 0, original.length);
             startFile(screen.get(), false, Uri.parse("content://choices/bad-seek"));
-            awaitToast("Not a valid HushMessenger backup");
+            // A seek that fails is a read failure, not a bad backup.
+            awaitToast("Couldn't read that file");
             finishWorkers();
             assertFalse(Settings.preferences.getBoolean("stories", false));
             assertArrayEquals(original, Files.readAllBytes(file));
         } finally { Files.deleteIfExists(file); }
     }
 
-    @Test @Config(sdk = {28, 29}) public void aNonSeekableFiniteStreamStillRestoresChoices() throws Exception {
+    @Test @Config(sdk = {30, 36}) public void atomicReplacementUsesPosixSemanticsAlongsideDocumentShadows() throws Exception {
+        var file = Files.createTempFile("choices-atomic", ".txt");
+        var atomic = new android.util.AtomicFile(file.toFile());
+        try {
+            Files.write(file, "old".getBytes(StandardCharsets.UTF_8));
+            var output = atomic.startWrite();
+            output.write("new".getBytes(StandardCharsets.UTF_8));
+            atomic.finishWrite(output);
+            assertArrayEquals("new".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(file));
+            assertFalse(Files.exists(java.nio.file.Path.of(file + ".new")));
+        } finally { atomic.delete(); }
+    }
+
+    @Test @Config(sdk = {28, 29, 36}) public void aNonSeekableFiniteStreamStillRestoresChoices() throws Exception {
         var file = Files.createTempFile("choices-nonseekable", ".txt");
         byte[] original = (ChoiceCodec.HEADER + "\nstories=true\n").getBytes(StandardCharsets.UTF_8);
         Files.write(file, original);
@@ -785,6 +976,35 @@ public class ChoiceBackupTest {
             finishWorkers();
             assertTrue(Settings.preferences.getBoolean("stories", false));
             assertArrayEquals(original, Files.readAllBytes(file));
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test @Config(sdk = {28, 29, 36}) public void aNonSeekableSliceWithAStartOffsetRestoresChoices() throws Exception {
+        var file = Files.createTempFile("choices-pipe-slice", ".txt");
+        byte[] prefix = "provider framing ".getBytes(StandardCharsets.UTF_8);
+        byte[] payload = (ChoiceCodec.HEADER + "\nstories=true\n").getBytes(StandardCharsets.UTF_8);
+        var bytes = new java.io.ByteArrayOutputStream();
+        bytes.write(prefix);
+        bytes.write(payload);
+        bytes.write("trailing provider bytes".getBytes(StandardCharsets.UTF_8));
+        Files.write(file, bytes.toByteArray());
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup();
+             var descriptor = ParcelFileDescriptor.open(file.toFile(), ParcelFileDescriptor.MODE_READ_ONLY)) {
+            Settings.installed = new HashSet<>(Set.of("stories"));
+            SeekableOs.errno = android.system.OsConstants.ESPIPE;
+            // The host file can seek, so stand in for a pipe on Android 9 and 10: their input stream skips to the
+            // start before it knows the length, which on a pipe reads nothing, and so starts at the front.
+            DocumentResolver.opener = (uri, signal) -> new AssetFileDescriptor(descriptor, prefix.length, payload.length) {
+                @Override public java.io.FileInputStream createInputStream() throws java.io.IOException {
+                    return android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R
+                        ? new ParcelFileDescriptor.AutoCloseInputStream(descriptor) : super.createInputStream();
+                }
+            };
+            startFile(screen.get(), false, Uri.parse("content://choices/pipe-slice"));
+            awaitToast("Restored 1 choice");
+            finishWorkers();
+            assertTrue(Settings.preferences.getBoolean("stories", false));
+            assertArrayEquals(bytes.toByteArray(), Files.readAllBytes(file));
         } finally { Files.deleteIfExists(file); }
     }
 
@@ -873,6 +1093,8 @@ public class ChoiceBackupTest {
             if (toast != null && toast.startsWith(prefix)) return;
             Thread.sleep(20);
         } while (System.currentTimeMillis() < deadline);
-        fail("Missing document result: " + prefix);
+        StringBuilder logged = new StringBuilder();
+        for (var item : org.robolectric.shadows.ShadowLog.getLogsForTag("HushMessenger")) logged.append(" | ").append(item.msg);
+        fail("Missing document result: " + prefix + "; latest toast: " + ShadowToast.getTextOfLatestToast() + "; log" + logged);
     }
 }

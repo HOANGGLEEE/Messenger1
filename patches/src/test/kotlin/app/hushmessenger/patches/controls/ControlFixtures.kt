@@ -6,6 +6,7 @@ import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod
 import com.android.tools.smali.dexlib2.AccessFlags
 import com.android.tools.smali.dexlib2.iface.Field
 import com.android.tools.smali.dexlib2.iface.Method
+import com.android.tools.smali.dexlib2.iface.ClassDef
 import com.android.tools.smali.dexlib2.immutable.ImmutableClassDef
 import com.android.tools.smali.dexlib2.immutable.ImmutableField
 import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
@@ -45,6 +46,33 @@ internal fun fixtureClass(
         interfaces, null, emptySet(), fields, methods))
 }
 
+/** getTranscodeConfig cut down to the native transcoder's switch going into the map it returns. */
+internal val TRANSCODE_CONFIG_BODY = """
+    new-instance v2, Ljava/util/HashMap;
+    invoke-direct {v2}, Ljava/util/HashMap;-><init>()V
+    sget-object v1, Ljava/lang/Boolean;->TRUE:Ljava/lang/Boolean;
+    const-string v0, "ENABLE_UIT_TRANSCODING"
+    if-eqz v1, :done
+    invoke-virtual {v2, v0, v1}, Ljava/util/AbstractMap;->put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+    :done
+    return-object v2
+""".trimIndent()
+
+/** decodeBitmap (22 registers, so p1 is v17) cut down to its whole-file decode of v11 and the shrink to its limits. */
+internal val DECODE_BITMAP_BODY = """
+    move-object/from16 v11, p1
+    invoke-static {v11}, Landroid/graphics/BitmapFactory;->decodeFile(Ljava/lang/String;)Landroid/graphics/Bitmap;
+    move-result-object v1
+    move-wide/from16 v2, p2
+    double-to-int v2, v2
+    move-wide/from16 v4, p4
+    double-to-int v4, v4
+    const/4 v5, 0x1
+    invoke-static {v1, v2, v4, v5}, Landroid/graphics/Bitmap;->createScaledBitmap(Landroid/graphics/Bitmap;IIZ)Landroid/graphics/Bitmap;
+    move-result-object v1
+    return-object v1
+""".trimIndent()
+
 /** The stock app component factory's two entry points, cut down to the shape the screen-host hooks check. */
 internal fun factoryActivity(registers: Int = 12, id: String = INSTANTIATE_ACTIVITY) = fixtureMethod(id, """
     const/4 v0, 0x0
@@ -62,6 +90,9 @@ internal fun factoryApplication(body: String = """
 
 internal fun bundledControlsMethod(body: String = "const-string v0, \"\"\nreturn-object v0") =
     fixtureMethod(BUNDLED_CONTROLS, body, 1, AccessFlags.STATIC.value)
+
+internal fun originalBuildMethod(body: String = "const-string v0, \"\"\nreturn-object v0") =
+    fixtureMethod(ORIGINAL_BUILD, body, 1, AccessFlags.STATIC.value)
 
 internal fun nativeBubbleRoutesMethod(body: String = "const/4 v0, 0x0\nreturn v0") =
     fixtureMethod(NATIVE_BUBBLE_ROUTES, body, 1, AccessFlags.PUBLIC.value or AccessFlags.STATIC.value)
@@ -115,13 +146,158 @@ internal fun nativeBubbleModeMethod(body: String? = null) = fixtureMethod(active
     return v2
 """.trimIndent(), 5)
 
-/** The factory and the extension class every settings run touches, as a supported APK plus the extension has them. */
+/** Build 347215273's A01: A00's checks copied in where 348 calls it, and the config fetched by number. */
+internal fun inlinedBubbleModeMethod(sdk: Int = 0x1e, holderOwner: String = activeProfile.hooks.getValue("bubbles").single().substringBefore("->")) =
+    fixtureMethod(activeProfile.hooks.getValue("bubble_mode").single(), """
+    const/4 v2, 0x0
+    invoke-static {p1, v2}, LX/98P;->A0m(Ljava/lang/Object;I)V
+    sget v1, Landroid/os/Build${'$'}VERSION;->SDK_INT:I
+    const/16 v0, $sdk
+    if-lt v1, v0, :not_native
+    iget-object v0, p0, $holderOwner->A02:LX/2wA;
+    iget-object v0, v0, LX/2wA;->A00:LX/0LD;
+    invoke-interface {v0}, LX/0LD;->get()Ljava/lang/Object;
+    move-result-object v0
+    check-cast v0, Landroid/app/ActivityManager;
+    invoke-virtual {v0}, Landroid/app/ActivityManager;->isLowRamDevice()Z
+    move-result v0
+    if-nez v0, :not_native
+    iget-object v0, p0, ${activeProfile.hooks.getValue("bubbles").single().substringBefore("->")}->A01:LX/2wA;
+    iget-object v0, v0, LX/2wA;->A00:LX/0LD;
+    invoke-interface {v0}, LX/0LD;->get()Ljava/lang/Object;
+    move-result-object v1
+    check-cast v1, ${activeProfile.bubbleCapabilityGetter.substringBefore("->")}
+    const/16 v0, 0x1c
+    invoke-virtual {v1, p1, v0}, ${activeProfile.bubbleCapabilityGetter}
+    move-result v0
+    if-eqz v0, :not_native
+    iget-object v0, p0, ${activeProfile.hooks.getValue("bubbles").single().substringBefore("->")}->A03:LX/2wA;
+    iget-object v0, v0, LX/2wA;->A00:LX/0LD;
+    invoke-interface {v0}, LX/0LD;->get()Ljava/lang/Object;
+    const v0, 0x241a1
+    invoke-static {v0}, LX/2w1;->A02(I)Ljava/lang/Object;
+    move-result-object v2
+    check-cast v2, LX/5cX;
+    const-wide v0, ${BUBBLE_ROLLOUT}L
+    check-cast v2, Lcom/facebook/mobileconfig/factory/MobileConfigUnsafeContext;
+    invoke-interface {v2, v0, v1}, ${activeProfile.bubbleRolloutGetter}
+    move-result v0
+    return v0
+    :not_native
+    return v2
+""".trimIndent(), 5)
+
+internal fun inboxRefreshRouteMethod(body: String = "const-string v0, \"\"\nreturn-object v0", flags: Int = AccessFlags.STATIC.value) =
+    fixtureMethod(INBOX_REFRESH_ROUTE, body, 1, flags)
+
+internal fun logoutRouteMethod(body: String = "const-string v0, \"\"\nreturn-object v0", flags: Int = AccessFlags.STATIC.value) =
+    fixtureMethod(LOGOUT_ROUTE, body, 1, flags)
+
+/** The factory and the extension classes every settings run touches, as a supported APK plus the extension has them. */
 internal fun screenHostClasses() = listOf(
     fixtureClass(FACTORY_TYPE, listOf(factoryActivity(), factoryApplication())),
-    fixtureClass(HOST_SCREENS, listOf(bundledControlsMethod(), nativeBubbleRoutesMethod())),
+    fixtureClass(HOST_SCREENS, listOf(bundledControlsMethod(), originalBuildMethod(), nativeBubbleRoutesMethod(), inboxRefreshRouteMethod(),
+        logoutRouteMethod())),
+    fixtureClass(INBOX_REFRESH, listOf(fixtureMethod(INBOX_ITEMS_CALL, "return-void", 1, AccessFlags.PUBLIC.value or AccessFlags.STATIC.value))),
 )
 
-internal const val PEOPLE_JEWEL_HOOK = "LX/HAR;->A01(LX/HAR;)Z"
+internal const val INBOX_ITEMS_HOOK = "$INBOX_SUPPLIER->A0B()$IMMUTABLE_LIST"
+internal const val INBOX_OBSERVER = "LX/34A;"
+/** What every supported build resolves: the subscribe call A0A and the listed count A00. */
+internal val INBOX_ROUTE = InboxRefreshRoute("$INBOX_SUPPLIER->A0A(${INBOX_SUPPLIER}Z)V", "$INBOX_SUPPLIER->A00:I")
+
+/** The chat list supplier's items read as Messenger starts it: the trace, then a check of the listed count. */
+internal fun inboxItemsMethod(
+    trace: String = INBOX_ITEMS_TRACE,
+    listed: String = "A00",
+    jumpToStart: Boolean = false,
+    flags: Int = AccessFlags.PUBLIC.value or AccessFlags.FINAL.value,
+    id: String = INBOX_ITEMS_HOOK,
+): MutableMethod {
+    val owner = if (AccessFlags.STATIC.isSet(flags)) "v2" else "p0"
+    return fixtureMethod(id, """
+        :start
+        const-string v1, "$trace"
+        invoke-static {v1}, LX/0Bv;->A01(Ljava/lang/String;)V
+        iget v0, $owner, $INBOX_SUPPLIER->$listed:I
+        iget-object v1, $owner, $INBOX_SUPPLIER->A04:$IMMUTABLE_LIST
+        ${if (jumpToStart) "if-eqz v0, :start" else "if-nez v0, :listed"}
+        :listed
+        const/4 v0, 0x0
+        return-object v0
+    """.trimIndent(), registers = 3, flags = flags)
+}
+
+/** The supplier's static subscribe call, cut down to its warning and the observer it builds from the supplier and a generation. */
+internal fun inboxSubscribeMethod(
+    warning: String = INBOX_SUBSCRIBE_WARNING,
+    init: String = "<init>(${INBOX_SUPPLIER}I)V",
+    between: String = "",
+    name: String = "A0A",
+    args: String = "v1, v2, v4",
+    params: String = "${INBOX_SUPPLIER}Z",
+) = fixtureMethod("$INBOX_SUPPLIER->$name($params)V", """
+    move-object v2, p0
+    const-string v0, "$warning"
+    const/4 v4, 0x0
+    new-instance v1, $INBOX_OBSERVER
+    $between
+    invoke-direct {$args}, $INBOX_OBSERVER->$init
+    invoke-static {v1, v2}, LX/0D8;->A00(Ljava/lang/Object;Ljava/lang/Object;)V
+    return-void
+""".trimIndent(), registers = 7, flags = AccessFlags.PUBLIC.value or AccessFlags.STATIC.value or AccessFlags.FINAL.value)
+
+internal fun inboxSupplierClass(
+    items: Method = inboxItemsMethod(),
+    subscribe: List<Method> = listOf(inboxSubscribeMethod()),
+    flags: Int = AccessFlags.PUBLIC.value or AccessFlags.FINAL.value,
+) = fixtureClass(INBOX_SUPPLIER, listOf(items) + subscribe, flags = flags,
+    extraFields = listOf("A00", "A01", "A02", "A03").map { ImmutableField(INBOX_SUPPLIER, it, "I", AccessFlags.PUBLIC.value, null, null, null) })
+
+/**
+ * The observer's list callback as 585 has it: 1 loaded early (it also sets a flag), the size, then the listed count
+ * keeps that 1 or takes 5 when the list is shorter than its limit. [between] lands after the early 1.
+ */
+internal fun inboxObserverClass(
+    high: Int = 5,
+    low: Int = 1,
+    field: String = "A00",
+    branch: String = "if-ge",
+    secondWrite: Boolean = false,
+    callbacks: Int = 1,
+    between: String = "",
+) = fixtureClass(INBOX_OBSERVER, listOf(
+    fixtureMethod("$INBOX_OBSERVER-><init>(${INBOX_SUPPLIER}I)V", "invoke-direct {p0}, Ljava/lang/Object;-><init>()V\nreturn-void", 3),
+) + (0 until callbacks).map { index ->
+    val again = if (!secondWrite) "" else """
+        const/4 v2, 0x1
+        if-ge v4, v3, :again
+        const/4 v2, 0x5
+        :again
+        iput v2, v0, $INBOX_SUPPLIER->$field:I
+    """.trimIndent()
+    fixtureMethod("$INBOX_OBSERVER->Cj${'P' + index}(Ljava/util/List;)V", listOf(
+        "iget-object v0, p0, $INBOX_OBSERVER->A00:Ljava/lang/Object;",
+        "check-cast v0, $INBOX_SUPPLIER",
+        "const/4 v2, $low",
+        "iput-boolean v2, v0, $INBOX_SUPPLIER->A07:Z",
+        between,
+        "invoke-interface {p1}, Ljava/util/List;->size()I",
+        "move-result v4",
+        "iget v3, v0, $INBOX_SUPPLIER->A02:I",
+        "iput v4, v0, $INBOX_SUPPLIER->A03:I",
+        "$branch v4, v3, :listed",
+        "const/4 v2, $high",
+        ":listed",
+        "iput v2, v0, $INBOX_SUPPLIER->$field:I",
+        again,
+        "return-void",
+    ).joinToString("\n"), registers = 7)
+}, flags = AccessFlags.PUBLIC.value or AccessFlags.FINAL.value)
+
+internal fun inboxRefreshClasses() = listOf(inboxSupplierClass(), inboxObserverClass())
+
+internal const val PEOPLE_JEWEL_HOOK = "LX/HAR;->A01(LX/3nt;LX/HAR;)Z"
 internal const val PEOPLE_TAB_HOOK = "LX/JZ6;->A01(LX/JZ6;)V"
 
 /** The People tab handler's publish step as 346013440 has it: list and filter map to the listener it loads first. */
@@ -190,48 +366,54 @@ internal fun peopleStoryMethod(
 """.trimIndent(), registers = 4, flags = flags)
 
 /**
- * Instructions 0-20 match the supported APKs; one instruction stands in for the list reset. With [inlinedReset],
- * 346013423's single call replaces the two calls at 14-15, so the server flag moves from 17 to 16.
+ * Instructions 0-20 match the supported APKs; one instruction stands in for the list reset. The suggestions logger
+ * comes first, so the owner is p1, and false lives in v5 of ten registers, with the [logger] load in v3. The older
+ * shapes are only there to be refused: with [inlinedReset] one call replaces the two at 14-15, so the server flag moves
+ * from 17 to 16, and without [logged] the reader takes only its owner and keeps false in v4 of six registers.
  */
 internal fun peopleJewelMethod(
     key: String = "LX/JTx;->A01:LX/1BL;",
     resultRegister: String = "v0",
-    serverFlag: String = "72344235860374863L",
+    serverFlag: String = "72344137076128710L",
     serverTarget: String = ":shown",
     flags: Int = AccessFlags.PUBLIC.value or AccessFlags.STATIC.value,
     inlinedReset: Boolean = false,
     extraFlag: Boolean = false,
     extraFlagValue: String = serverFlag,
-) = fixtureMethod(PEOPLE_JEWEL_HOOK, """
-    iget-object v0, p0, LX/HAR;->A07:LX/17Z;
+    logged: Boolean = true,
+    default: String = if (logged) "v5" else "v4",
+    registers: Int = if (logged) 10 else 6,
+    logger: String = "v3",
+) = fixtureMethod(if (logged) PEOPLE_JEWEL_HOOK else PEOPLE_JEWEL_HOOK.replace("(LX/3nt;", "("), """
+    iget-object v0, ${if (logged) "p1" else "p0"}, LX/HAR;->A07:LX/17Z;
     invoke-static {v0}, LX/17Z;->A0F(LX/17Z;)Ljava/lang/Object;
     move-result-object v0
     check-cast v0, LX/JTx;
-    iget-object v2, p0, LX/HAR;->A01:Lcom/facebook/auth/usersession/FbUserSession;
+    iget-object v2, ${if (logged) "p1" else "p0"}, LX/HAR;->A01:Lcom/facebook/auth/usersession/FbUserSession;
     iget-object v0, v0, LX/JTx;->A00:LX/17Z;
     invoke-static {v0}, LX/17Z;->A0C(LX/17Z;)Lcom/facebook/prefs/shared/FbSharedPreferences;
     move-result-object v1
     sget-object v0, $key
-    const/4 v4, 0x0
-    invoke-interface {v1, v0, v4}, $PREFERENCE_GETTER
+    const/4 $default, 0x0
+    invoke-interface {v1, v0, $default}, $PREFERENCE_GETTER
     move-result $resultRegister
     if-eqz v0, :shown
-    iget-object v0, p0, LX/HAR;->A06:LX/17Z;
+    iget-object v0, ${if (logged) "p1" else "p0"}, LX/HAR;->A06:LX/17Z;
     ${if (inlinedReset) "invoke-static {v0, v2}, LX/H7e;->A0T(LX/17Z;Ljava/lang/Object;)LX/4qb;"
-      else "invoke-static {v0}, LX/17Z;->A0I(LX/17Z;)V\n    invoke-static {v2, v4}, LX/1Aa;->A07(Ljava/lang/Object;I)LX/4nI;"}
+      else "invoke-static {v0}, LX/17Z;->A0I(LX/17Z;)V\n    invoke-static {v2, $default}, LX/1Aa;->A07(Ljava/lang/Object;I)LX/4nI;"}
     move-result-object v2
     const-wide v0, $serverFlag
     invoke-static {v2, v0, v1}, LX/16z;->A1Z(Ljava/lang/Object;J)Z
     move-result v0
     if-nez v0, $serverTarget
-    iget-object v3, p0, LX/HAR;->A0F:LX/WZw;
+    iget-object $logger, ${if (logged) "p1" else "p0"}, LX/HAR;->A0F:LX/WZw;
     ${if (extraFlag) "const-wide v0, $extraFlagValue" else ""}
     :hidden
     const/4 v0, 0x1
     return v0
     :shown
-    return v4
-""".trimIndent(), registers = 6, flags = flags)
+    return $default
+""".trimIndent(), registers = registers, flags = flags)
 
 internal fun peopleJewelKeyHolder() = fixtureClass("LX/JTx;", listOf(fixtureMethod("LX/JTx;-><clinit>()V", """
     const-string v0, "pymk_jewel_section_hidden"
@@ -285,9 +467,12 @@ internal fun messageWrapperFixture(
     idGetter: String = "B9d",
     unsentGetter: String = "Btd",
 ): MutableClass {
+    // 583 reads the text getter's row straight from the list; the other getters still go through the helper.
     val bwoMethod = fixtureMethod("$type->$textGetter(I)Ljava/lang/String;", """
-        invoke-static {p0, p1}, $type->A00(${type}I)Lfixture/KKn;
+        iget-object v0, p0, $type->A00:Ljava/util/List;
+        invoke-interface {v0, p1}, Ljava/util/List;->get(I)Ljava/lang/Object;
         move-result-object v0
+        check-cast v0, Lfixture/KKn;
         invoke-interface {v0}, Lfixture/KKn;->BWn()Ljava/lang/String;
         move-result-object v0
         return-object v0
@@ -385,4 +570,65 @@ internal fun storyReadSetClass(
     val methods = listOf(fixtureMethod(STORY_READ_SET_INIT, init, registers = 4), fixtureMethod(STORY_READ_SET_ADD, add, registers = 9)) + extraMethods
     return MutableClass(ImmutableClassDef(STORY_READ_SET, AccessFlags.PUBLIC.value or AccessFlags.FINAL.value, "Ljava/lang/Object;",
         emptyList(), null, emptySet(), fields, methods))
+}
+
+internal const val STORY_PREVIEW_RING = "$MONTAGE_BUCKET_PREVIEW->A00(${FB_USER_SESSION}Z)LX/4Qx;"
+
+/**
+ * The preview's constructor cut down to the writes the ring hook checks, with 346013440's 23 registers, so p0 is v6:
+ * the new-story flag, the count, the card, then the own-story check and its throw before the only return.
+ */
+internal const val STORY_PREVIEW_INIT_BODY = """invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+move/from16 v2, p12
+iput-boolean v2, p0, $MONTAGE_BUCKET_PREVIEW->A0D:Z
+move/from16 v1, p13
+iput-boolean v1, p0, $MONTAGE_BUCKET_PREVIEW->A0E:Z
+move/from16 v0, p11
+iput v0, p0, $MONTAGE_BUCKET_PREVIEW->A02:I
+iput-object p3, p0, $MONTAGE_BUCKET_PREVIEW->A05:$MONTAGE_CARD
+if-eqz p13, :keep
+if-eqz p12, :keep
+const-string v0, "myMontage"
+invoke-static {v0}, LX/001;->A0P(Ljava/lang/String;)Ljava/lang/IllegalStateException;
+move-result-object v0
+throw v0
+:keep
+move/from16 v0, p16
+iput-boolean v0, p0, $MONTAGE_BUCKET_PREVIEW->A0A:Z
+return-void"""
+
+/** Messenger's ring state for a preview: your own story first, then close friends, then new while the flag or the count says so. */
+internal const val STORY_PREVIEW_RING_BODY = """iget-boolean v0, p0, $MONTAGE_BUCKET_PREVIEW->A0E:Z
+if-eqz v0, :others
+sget-object v0, LX/4Qx;->A09:LX/4Qx;
+return-object v0
+:others
+iget-boolean v0, p0, $MONTAGE_BUCKET_PREVIEW->A0C:Z
+if-eqz v0, :plain
+sget-object v0, LX/4Qx;->A03:LX/4Qx;
+return-object v0
+:plain
+iget-boolean v0, p0, $MONTAGE_BUCKET_PREVIEW->A0D:Z
+if-nez v0, :ring
+iget v0, p0, $MONTAGE_BUCKET_PREVIEW->A02:I
+if-lez v0, :seen
+:ring
+sget-object v0, LX/4Qx;->A08:LX/4Qx;
+return-object v0
+:seen
+sget-object v0, LX/4Qx;->A07:LX/4Qx;
+return-object v0"""
+
+internal fun storyPreviewClass(
+    init: String = STORY_PREVIEW_INIT_BODY,
+    ring: String = STORY_PREVIEW_RING_BODY,
+    cards: Int = 1,
+    extraMethods: List<Method> = emptyList(),
+): MutableClass {
+    val final = AccessFlags.PUBLIC.value or AccessFlags.FINAL.value
+    val fields = listOf("A02" to "I", "A0A" to "Z", "A0C" to "Z", "A0D" to "Z", "A0E" to "Z")
+        .map { (name, type) -> ImmutableField(MONTAGE_BUCKET_PREVIEW, name, type, final, null, null, null) } +
+        (0 until cards).map { ImmutableField(MONTAGE_BUCKET_PREVIEW, "A0${5 + it}", MONTAGE_CARD, final, null, null, null) }
+    val methods = listOf(fixtureMethod(STORY_PREVIEW_INIT, init, registers = 23), fixtureMethod(STORY_PREVIEW_RING, ring, registers = 5)) + extraMethods
+    return MutableClass(ImmutableClassDef(MONTAGE_BUCKET_PREVIEW, final, "Ljava/lang/Object;", emptyList(), null, emptySet(), fields, methods))
 }

@@ -1,5 +1,8 @@
 package app.hushmessenger.extension;
 
+import android.app.ActivityManager;
+import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.media.ExifInterface;
 import android.net.Uri;
@@ -20,12 +23,15 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.function.LongSupplier;
 
 /**
  * "Send photos at original quality". In encrypted chats Messenger hands every photo to DefaultMediaTranscoder, which
- * re-encodes it even with HD on (a 6.4 MB 4032x3024 JPEG went out as about 1.8 MB). For an HD send of a JPEG these
- * prologues hand back a copy of the photo's own image data, without its metadata except a rotation tag, and Messenger
- * encrypts and uploads that. Anything else, and any failure here, falls through to Messenger's own transcode.
+ * re-encodes it even with HD on (a 6.4 MB 4032x3024 JPEG went out as about 1.8 MB). Where it calls transcodeImage, these
+ * prologues hand back a copy of an HD JPEG's own image data, without its metadata except a rotation tag, and Messenger
+ * encrypts and uploads that. 583 sends photos through msys's native transcoder instead, which shrinks an HD photo to
+ * 4096 pixels. With the switch on, photos take Messenger's Java transcoder there, and an HD JPEG's decode keeps its full
+ * size. Anything else, and any failure here, falls through to Messenger's own transcode.
  */
 public final class OriginalPhoto {
     private OriginalPhoto() { }
@@ -35,10 +41,39 @@ public final class OriginalPhoto {
     static final long MAX_BYTES = 20_000_000;
     /** Smaller targets are thumbnails and previews, never the photo that gets sent. */
     static final double MIN_TARGET = 1024;
+    /** Messenger's Java transcoder asks decodeBitmap for 4096x4096 on an HD send and 2048x2048 on a normal one. */
+    static final double HD_TARGET = 4096;
+    /** Pixel memory a full-size decode may take, counting the upright copy Messenger makes of a turned photo. */
+    static final long MAX_DECODE_BYTES = 400L << 20;
+    static final int MAX_SAMPLE = 64;
+    /** The server switch that sends photos through msys's native transcoder, which none of these hooks reach. */
+    static final String NATIVE_TRANSCODER = "ENABLE_UIT_TRANSCODING";
+    /** The bitmap memory one decode may use right now. */
+    static LongSupplier freeMemory = OriginalPhoto::freeMemory;
+    interface Decoder { Bitmap decode(String path, BitmapFactory.Options options); }
+    /** decodeFile's pixel decode, the step that can run out of memory. */
+    static Decoder decoder = BitmapFactory::decodeFile;
+    /** What this thread's decodeBitmap call asked for, from its entry to its one decodeFile. */
+    private static final ThreadLocal<Decode> DECODE = new ThreadLocal<>();
     /** Completes async sends off the calling thread, the way Messenger's own transcoder does. */
     static Executor completion = Executors.newSingleThreadExecutor();
     /** Where the copies go; null is the app's cache, where Messenger's own transcoder writes its output too. */
     static File tempDir;
+    static final long KEEP_COPIES_MS = 7L * 24 * 60 * 60 * 1000;
+    private static final java.util.concurrent.atomic.AtomicBoolean SWEPT = new java.util.concurrent.atomic.AtomicBoolean();
+
+    /**
+     * An async send hands its copy to Messenger, and Messenger may never delete a file it didn't write. Once a run,
+     * copies older than a week go, so they can't pile up in the cache at up to 20 MB each. A week leaves room for a
+     * send that waits days offline before it uploads.
+     */
+    static void sweepOldCopies(File folder, long now) {
+        File[] copies = folder == null ? null : folder.listFiles((dir, name) -> name.startsWith("hush-photo") && name.endsWith(".jpg"));
+        if (copies == null) return;
+        for (File copy : copies) {
+            if (now - copy.lastModified() > KEEP_COPIES_MS && !copy.delete() && copy.exists()) Log.w("HushMessenger", "Can't remove an old photo copy");
+        }
+    }
     interface InputOpener { FileInputStream open(File file) throws IOException; }
     static InputOpener inputOpener = FileInputStream::new;
 
@@ -182,6 +217,9 @@ public final class OriginalPhoto {
             success.invoke(callback, Uri.fromFile(sent.copy).toString(), width, height,
                 sent.quarterTurn() ? height : width, sent.quarterTurn() ? width : height, 100.0, -1.0,
                 rotated, 0, false, 0.0, 0.0, 0.0);
+        } catch (java.lang.reflect.InvocationTargetException error) {
+            // Messenger entered success and may already own the copy. Never complete the send twice.
+            Settings.hookFailedPrivately(KEY, "Original photo success callback failed", error);
         } catch (IOException | ReflectiveOperationException | RuntimeException error) {
             sent.copy.delete();
             Settings.hookFailedPrivately(KEY, "Original photo couldn't hand over its copy", error);
@@ -200,6 +238,150 @@ public final class OriginalPhoto {
 
     static Method failureMethod(Class<?> callback) throws NoSuchMethodException {
         return callback.getMethod("failure", double.class, double.class, Throwable.class);
+    }
+
+    /** The size a decodeBitmap call fits the photo into, and the sample its decode starts at (0 to work it out). */
+    static final class Decode {
+        final double width, height;
+        final int sample;
+
+        Decode(double width, double height, int sample) {
+            this.width = width;
+            this.height = height;
+            this.sample = sample;
+        }
+    }
+
+    /**
+     * DefaultMediaTranscoder.getTranscodeConfig, on its way out. With the switch on, photos skip msys's native transcoder
+     * for Messenger's own Java one, its fallback, whose decode the hooks below can size. The config has no per-photo
+     * details, so normal sends take that route too, at Messenger's normal size.
+     */
+    @SuppressWarnings("unchecked")
+    public static void transcodeConfig(Map<?, ?> config) {
+        try {
+            if (config != null && config.get(NATIVE_TRANSCODER) instanceof Boolean && Settings.wouldUse(KEY)) {
+                ((Map<Object, Object>) config).put(NATIVE_TRANSCODER, Boolean.FALSE);
+            }
+        } catch (RuntimeException error) {
+            Settings.hookFailedPrivately(KEY, "Original photo couldn't pick Messenger's Java transcoder", error);
+        }
+    }
+
+    /**
+     * DefaultMediaTranscoder.decodeBitmap's width limit, swapped in at its entry. An HD send of a JPEG up to 20 MB that's
+     * larger than the limit gets its own long side as the limit, so Messenger keeps it whole, or at the largest half,
+     * quarter and so on that fits in memory. A normal send, a preview and anything this can't read keep Messenger's.
+     */
+    public static double decodeWidth(String url, double maxWidth, double maxHeight) {
+        DECODE.remove();
+        try {
+            if (!(maxWidth > 0 && maxHeight > 0) || !Settings.wouldUse(KEY)) return maxWidth;
+            Decode lifted;
+            try {
+                lifted = lift(url, maxWidth, maxHeight);
+            } catch (NotPassable refused) {
+                lifted = skip(refused.getMessage());
+            }
+            Decode decode = lifted != null ? lifted : new Decode(maxWidth, maxHeight, 0);
+            DECODE.set(decode);
+            return decode.width;
+        } catch (IOException | RuntimeException | OutOfMemoryError error) {
+            DECODE.remove();
+            Settings.hookFailedPrivately(KEY, "Original photo couldn't size a photo, Messenger's copy is sent instead", error);
+            return maxWidth;
+        }
+    }
+
+    /** decodeBitmap's height limit, right after decodeWidth swapped in the width. */
+    public static double decodeHeight(String url, double width, double maxHeight) {
+        Decode decode = DECODE.get();
+        return decode != null && decode.width == width ? decode.height : maxHeight;
+    }
+
+    /** The full-size limit for an HD JPEG larger than Messenger's, or null to keep Messenger's. */
+    static Decode lift(String url, double maxWidth, double maxHeight) throws IOException {
+        double target = Math.min(maxWidth, maxHeight);
+        if (target < HD_TARGET) return null;
+        String path = url == null ? null : url.startsWith("file:") ? Uri.parse(url).getPath() : new File(url).isAbsolute() ? url : null;
+        if (path == null) return skip("not a file");
+        File file = new File(path);
+        long size = file.length();
+        if (!file.isFile() || size <= 0) return skip("unreadable file");
+        if (size > MAX_BYTES) return skip("over " + MAX_BYTES / 1_000_000 + " MB");
+        if (!startsLikeJpeg(file)) return skip("not a JPEG");
+        int[] bounds = bounds(path);
+        if (bounds == null) return skip("no image size");
+        int longSide = Math.max(bounds[0], bounds[1]);
+        // Messenger already sends it whole.
+        if (longSide <= target) return null;
+        // Messenger turns a tagged photo upright into a second bitmap while the first is still held.
+        int copies = orientation(file, ExifInterface.ORIENTATION_NORMAL) > ExifInterface.ORIENTATION_NORMAL ? 2 : 1;
+        long budget = Math.min(MAX_DECODE_BYTES, freeMemory.getAsLong());
+        for (int sample = 1; sample <= MAX_SAMPLE; sample *= 2) {
+            int side = (longSide + sample - 1) / sample;
+            if (side <= target) break;
+            long bytes = 4L * copies * ((bounds[0] + sample - 1) / sample) * ((bounds[1] + sample - 1) / sample);
+            if (bytes > budget) continue;
+            // Recorded only when the send really changes, so "Used" on the settings screen means a larger photo.
+            if (!Settings.enabled(KEY)) return null;
+            Log.i("HushMessenger", "Original photo: " + bounds[0] + "x" + bounds[1] + (sample == 1 ? " sent whole" : " sent at 1/" + sample));
+            return new Decode(side, side, sample);
+        }
+        return skip("not enough memory for " + bounds[0] + "x" + bounds[1]);
+    }
+
+    /**
+     * decodeBitmap's one decode, which reads the whole photo and then shrinks it to the limit. This one starts at the
+     * largest power of two step down that still covers the limit either way round, so a large photo takes no more memory
+     * than the size it's sent at. Out of memory, it tries again at half that, and past 1/64 it fails the way a decode
+     * fails, so Messenger reports the send.
+     */
+    public static Bitmap decodeFile(String path) {
+        Decode decode = DECODE.get();
+        DECODE.remove();
+        if (decode == null || path == null) return BitmapFactory.decodeFile(path);
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        try {
+            options.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(path, options);
+            int sample = decode.sample > 0 ? decode.sample : options.outWidth > 0 && options.outHeight > 0
+                ? sample(options.outWidth, options.outHeight, decode.width, decode.height) : 1;
+            options = new BitmapFactory.Options();
+            options.inSampleSize = sample;
+        } catch (RuntimeException error) {
+            Settings.hookFailedPrivately(KEY, "Original photo couldn't read a photo's size", error);
+            return BitmapFactory.decodeFile(path);
+        }
+        while (true) {
+            try {
+                return decoder.decode(path, options);
+            } catch (OutOfMemoryError error) {
+                if (options.inSampleSize >= MAX_SAMPLE) {
+                    Settings.hookFailedPrivately(KEY, "Original photo ran out of memory on a photo", error);
+                    return null;
+                }
+                options.inSampleSize *= 2;
+            }
+        }
+    }
+
+    /** The largest power of two that a width x height photo can shrink by and still cover Messenger's fit, upright or turned. */
+    static int sample(int width, int height, double maxWidth, double maxHeight) {
+        double ratio = Math.min(Math.max(width / maxWidth, height / maxHeight), Math.max(height / maxWidth, width / maxHeight));
+        int sample = 1;
+        while (sample < MAX_SAMPLE && sample * 2 <= ratio) sample *= 2;
+        return sample;
+    }
+
+    /** Bitmap pixels live outside the Java heap, so the phone's free memory bounds a decode: half of what's left above Android's low-memory line. */
+    static long freeMemory() {
+        Context context = Settings.appContext;
+        ActivityManager manager = context == null ? null : context.getSystemService(ActivityManager.class);
+        if (manager == null) return 0;
+        ActivityManager.MemoryInfo info = new ActivityManager.MemoryInfo();
+        manager.getMemoryInfo(info);
+        return info.lowMemory ? 0 : Math.max(0, (info.availMem - info.threshold) / 2);
     }
 
     /** A metadata-free copy of the photo when this send can use the original, else null. */
@@ -230,6 +412,7 @@ public final class OriginalPhoto {
         if (longTarget > 0 && (longSide > longTarget || shortSide > shortTarget)) {
             return skip(bounds[0] + "x" + bounds[1] + " is larger than " + (int) maxWidth + "x" + (int) maxHeight);
         }
+        if (SWEPT.compareAndSet(false, true)) sweepOldCopies(tempDir != null ? tempDir : new File(System.getProperty("java.io.tmpdir")), System.currentTimeMillis());
         File copy = File.createTempFile("hush-photo", ".jpg", tempDir);
         try {
             copyImageData(file, copy, orientation);
@@ -266,7 +449,7 @@ public final class OriginalPhoto {
     }
 
     /** Says why an HD photo keeps Messenger's transcode; the reason never includes the file's name or contents. */
-    static Prepared skip(String reason) {
+    static <T> T skip(String reason) {
         Log.i("HushMessenger", "Original photo skipped: " + reason);
         return null;
     }

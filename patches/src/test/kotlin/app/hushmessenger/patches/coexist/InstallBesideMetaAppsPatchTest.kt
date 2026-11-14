@@ -1,5 +1,6 @@
 package app.hushmessenger.patches.coexist
 
+import app.hushmessenger.patches.MessengerTarget
 import app.morphe.patcher.patch.PatchException
 import org.w3c.dom.Document
 import org.w3c.dom.Element
@@ -8,6 +9,8 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class InstallBesideMetaAppsPatchTest {
     private val appCommunication = "com.facebook.permission.prod.FB_APP_COMMUNICATION"
@@ -17,22 +20,24 @@ class InstallBesideMetaAppsPatchTest {
 
     @Test
     fun acceptsAllCheckedVersionCodes() {
-        validateVersionCode("346013387")
-        validateVersionCode("346013440")
-        validateVersionCode("346013442")
-        validateVersionCode("346013354")
+        for (code in MessengerTarget.VERSION_CODES) validateVersionCode(code.toString())
     }
 
     @Test
     fun rejectsAnotherBuildWithTheSameVersionName() {
-        val failure = assertFailsWith<PatchException> { validateVersionCode("346013438") }
-        assertContains(failure.message.orEmpty(), "version code 346013438 is not supported")
+        val failure = assertFailsWith<PatchException> { validateVersionCode("346814900") }
+        // Manager prints another patch's name above this line, so the build comes first.
+        assertTrue(
+            failure.message.orEmpty().startsWith("This Messenger build (version code 346814900) isn't supported yet"),
+            failure.message,
+        )
+        assertFalse(failure.message.orEmpty().contains("Install beside Meta apps"), failure.message)
+        assertEquals(1, failure.message.orEmpty().lines().size)
         assertActionable(failure)
     }
 
     private fun assertActionable(failure: PatchException) {
-        assertContains(failure.message.orEmpty(), "Use an unmodified arm64 Messenger 580.0.0.49.91 APK")
-        assertContains(failure.message.orEmpty(), "version code 346013387 or 346013440 or 346013442")
+        assertContains(failure.message.orEmpty(), "Use an unmodified Messenger ${MessengerTarget.supportedApks()}")
     }
 
     private fun manifest(): Document {

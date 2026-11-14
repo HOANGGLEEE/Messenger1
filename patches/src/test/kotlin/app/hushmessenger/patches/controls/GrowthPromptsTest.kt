@@ -40,7 +40,7 @@ private fun launcher(body: String = """
 private fun reference(instruction: Instruction) = (instruction as ReferenceInstruction).reference.toString()
 
 class GrowthPromptsTest {
-    private fun found(vararg classes: ClassDef) = findControls(classes.toList())
+    private fun found(vararg classes: ClassDef) = mirroredControls(classes.toList())
 
     @Test fun theStoryCardCheckIsFoundThroughItsDateKey() {
         val viewer = fixtureClass(VIEWER, listOf(cardCheck()))

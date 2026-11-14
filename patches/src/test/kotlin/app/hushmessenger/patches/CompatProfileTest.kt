@@ -3,7 +3,9 @@ package app.hushmessenger.patches
 import app.hushmessenger.patches.coexist.expectedDexSitesFor
 import app.hushmessenger.patches.controls.BASE_PROFILE
 import app.hushmessenger.patches.controls.ControlProfile
-import app.hushmessenger.patches.controls.PROFILE_346013370
+import app.hushmessenger.patches.controls.PROFILE_347415280
+import app.hushmessenger.patches.controls.PROFILE_347415262
+import app.hushmessenger.patches.controls.PROFILE_347415354
 import app.hushmessenger.patches.controls.controlProfileFor
 import com.android.tools.smali.dexlib2.Opcode
 import java.io.File
@@ -45,8 +47,6 @@ class CompatProfileTest {
         "subtabsSupplier $subtabsSupplier",
         "browserPreferenceKey $browserPreferenceKey",
         "browserPreferenceIndex $browserPreferenceIndex",
-        "adFilterSize $adFilterSize",
-        "adFilterExits ${adFilterExits.joinToString(" ")}",
         "bubbleCapabilityGetter $bubbleCapabilityGetter",
         "bubbleRolloutGetter $bubbleRolloutGetter",
         "nativeBubbleRoutes $nativeBubbleRoutes",
@@ -55,6 +55,13 @@ class CompatProfileTest {
 
     private fun source(file: String) =
         Path.of("src/main/kotlin/app/hushmessenger/patches/$file").readText().replace("\r\n", "\n")
+
+    /** A copy of the report in [dir], the launcher with its scripts/compat sources, so it reads [dir]'s profiles. */
+    private fun copyReport(dir: Path) {
+        Files.copy(Path.of("../scripts/CompatReport.java"), dir.resolve("CompatReport.java"))
+        val compat = dir.resolve("compat").createDirectories()
+        for (source in Path.of("../scripts/compat").listDirectoryEntries("*.java")) Files.copy(source, compat.resolve(source.fileName))
+    }
 
     /** Runs scripts/CompatReport.java (or a copy) as a source file, with the dexlib2 and Guava this build resolved. */
     private fun compatReport(vararg args: String, script: String = "../scripts/CompatReport.java"): Pair<Int, String> {
@@ -83,21 +90,30 @@ class CompatProfileTest {
         }
     }
 
-    @Test fun record346013370GeneratesItsProfileAndSitesExactlyAsInTheSource(@TempDir dir: Path) {
-        assertSame(PROFILE_346013370, controlProfileFor("346013370"))
-        // 346013372 shares this mapping, so a copy of the script that knows only this record prints the blocks.
-        Files.copy(Path.of("../scripts/CompatReport.java"), dir.resolve("CompatReport.java"))
+    @Test fun record347415354GeneratesItsProfileAndSitesExactlyAsInTheSource(@TempDir dir: Path) =
+        assertRecordGeneratesTheSource(347415354, PROFILE_347415354, dir)
+
+    @Test fun record347415262GeneratesItsProfileAndSitesExactlyAsInTheSource(@TempDir dir: Path) =
+        assertRecordGeneratesTheSource(347415262, PROFILE_347415262, dir)
+
+    @Test fun record347415280GeneratesItsProfileAndSitesExactlyAsInTheSource(@TempDir dir: Path) =
+        assertRecordGeneratesTheSource(347415280, PROFILE_347415280, dir)
+
+    private fun assertRecordGeneratesTheSource(code: Int, profile: ControlProfile, dir: Path) {
+        assertSame(profile, controlProfileFor("$code"))
+        // A copy of the script that knows only this record prints the blocks.
+        copyReport(dir)
         dir.resolve("profiles").createDirectories()
-        Files.copy(profiles.resolve("346013370.txt"), dir.resolve("profiles/346013370.txt"))
+        Files.copy(profiles.resolve("$code.txt"), dir.resolve("profiles/$code.txt"))
         val (exit, output) = compatReport(
-            "--kotlin", dir.resolve("profiles/346013370.txt").toString(), script = dir.resolve("CompatReport.java").toString(),
+            "--kotlin", dir.resolve("profiles/$code.txt").toString(), script = dir.resolve("CompatReport.java").toString(),
         )
         assertEquals(0, exit, output)
         val blocks = output.split("\n\n").filter { it.startsWith("internal val ") }.map { it.trimEnd() + "\n" }
         assertEquals(2, blocks.size, output)
-        assertTrue(blocks[0].startsWith("internal val PROFILE_346013370 = ControlProfile("), blocks[0])
+        assertTrue(blocks[0].startsWith("internal val PROFILE_$code = ControlProfile("), blocks[0])
         assertContains(source("controls/ControlProfiles.kt"), blocks[0])
-        assertTrue(blocks[1].startsWith("internal val expectedDexSites346013370 = mapOf("), blocks[1])
+        assertTrue(blocks[1].startsWith("internal val expectedDexSites$code = mapOf("), blocks[1])
         assertContains(source("coexist/InstallBesideMetaAppsPatch.kt"), blocks[1])
     }
 
@@ -110,26 +126,29 @@ class CompatProfileTest {
         }
     }
 
-    @Test fun record346013387MapsToTheBaseProfile() {
-        assertEquals(BASE_PROFILE.lines(), controlLines(346013387))
-        val (exit, output) = compatReport("--kotlin", "../scripts/profiles/346013387.txt")
+    @Test fun aRecordLikeAnotherBuildsReusesItsProfileAndSites(@TempDir dir: Path) {
+        assertEquals(BASE_PROFILE.lines(), controlLines(347415354))
+        copyReport(dir)
+        dir.resolve("profiles").createDirectories()
+        Files.copy(profiles.resolve("347415354.txt"), dir.resolve("profiles/347415354.txt"))
+        val twin = dir.resolve("profiles/347415349.txt")
+        twin.writeLines(record(347415354).map { if (it == "code 347415354") "code 347415349" else it })
+        val (exit, output) = compatReport("--kotlin", twin.toString(), script = dir.resolve("CompatReport.java").toString())
         assertEquals(0, exit, output)
         assertFalse("internal val" in output, output)
-        val base = "346013354, 346013355, 346013356, 346013394, 346013440, 346013441, 346013442"
-        assertContains(output, "the controls match build $base.")
-        assertContains(output, "the permission loads match build $base.")
-        for (code in base.split(", ") + "346013387") assertSame(BASE_PROFILE, controlProfileFor(code))
+        assertContains(output, "the controls match build 347415354.")
+        assertContains(output, "the permission loads match build 347415354.")
     }
 
     @Test fun aRecordWithUnresolvedControlsListsThemAndGeneratesNothing(@TempDir dir: Path) {
         val broken = dir.resolve("346999999.txt")
-        broken.writeLines(profiles.resolve("346013370.txt").readLines()
-            .filterNot { it.startsWith("hook ads ") || it.startsWith("browserPreferenceIndex ") }
-            .map { if (it == "code 346013370") "code 346999999" else it } + "hook people LX/Extra;->A00()Z")
+        broken.writeLines(profiles.resolve("347415354.txt").readLines()
+            .filterNot { it.startsWith("hook ai_fab ") || it.startsWith("browserPreferenceIndex ") }
+            .map { if (it == "code 347415354") "code 346999999" else it } + "hook people LX/Extra;->A00()Z")
         val (exit, output) = compatReport("--kotlin", broken.toString())
         assertEquals(1, exit, output)
         assertContains(output, "No profile generated. These controls did not resolve:")
-        assertContains(output, "ads: expected 1 hooks, found 0")
+        assertContains(output, "ai_fab: expected 1 hooks, found 0")
         assertContains(output, "people: expected 2 hooks, found 3")
         assertContains(output, "browser: browserPreferenceIndex not found")
         assertFalse("internal val" in output, output)
@@ -142,8 +161,46 @@ class CompatProfileTest {
         val (exit, output) = compatReport(apk.toString(), "--save", saved.toString())
         assertEquals(1, exit, output)
         assertContains(output, "PROFILE: not written. These controls did not resolve:")
-        for (key in listOf("ads", "stories", "menu_settings")) assertContains(output, "       $key: expected")
-        assertContains(output, "Install beside Meta apps: expected 6 permission loads, found 0")
+        for (key in listOf("ai_fab", "stories", "menu_settings")) assertContains(output, "       $key: expected")
+        assertContains(output, "Install beside Meta apps: expected 3 permission loads, found 0")
         assertEquals(emptyList(), saved.listDirectoryEntries())
+    }
+
+    @Test fun saveRefusesAnApkWhoseSignerIsntProvenStock(@TempDir dir: Path) {
+        val apk = dir.resolve("unsigned.apk")
+        ZipOutputStream(Files.newOutputStream(apk)).use { it.putNextEntry(ZipEntry("resources.arsc")); it.closeEntry() }
+        val saved = dir.resolve("saved").createDirectories()
+        val (exit, output) = compatReport(apk.toString(), "--save", saved.toString())
+        assertEquals(1, exit, output)
+        assertContains(output, "[FAIL] Signer: apksigner couldn't read it, and --save records only an APK signed by Facebook or Meta")
+        assertEquals(emptyList(), saved.listDirectoryEntries())
+        // Without --save the report only reads the APK, so the signer stays a warning there.
+        val (_, report) = compatReport(apk.toString())
+        assertFalse("[FAIL] Signer" in report, report)
+    }
+
+    @Test fun aTruncatedApkIsNamedInOneLineAndExitsTwo(@TempDir dir: Path) {
+        val apk = dir.resolve("truncated.apk")
+        Files.write(apk, byteArrayOf(0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00))
+        val (exit, output) = compatReport(apk.toString())
+        assertEquals(2, exit, output)
+        assertContains(output, "$apk: isn't a readable APK")
+        assertFalse("\tat " in output || "Exception in thread" in output, output)
+    }
+
+    @Test fun aMalformedRecordIsNamedInOneLineAndExitsTwo(@TempDir dir: Path) {
+        copyReport(dir)
+        val record = dir.resolve("profiles").createDirectories().resolve("347415354.txt")
+        record.writeLines(profiles.resolve("347415354.txt").readLines() + "hook people")
+        val apk = dir.resolve("any.apk")
+        ZipOutputStream(Files.newOutputStream(apk)).use { it.putNextEntry(ZipEntry("resources.arsc")); it.closeEntry() }
+        val (exit, output) = compatReport(apk.toString(), script = dir.resolve("CompatReport.java").toString())
+        assertEquals(2, exit, output)
+        assertContains(output, "$record: malformed line hook people")
+        assertFalse("\tat " in output || "Exception in thread" in output, output)
+        // The same record read for --kotlin says the same.
+        val (kotlinExit, kotlin) = compatReport("--kotlin", record.toString(), script = dir.resolve("CompatReport.java").toString())
+        assertEquals(2, kotlinExit, kotlin)
+        assertContains(kotlin, "$record: malformed line hook people")
     }
 }

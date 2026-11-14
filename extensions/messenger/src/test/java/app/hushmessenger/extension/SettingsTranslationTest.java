@@ -32,6 +32,7 @@ public class SettingsTranslationTest {
     @Before public void reset() {
         Settings.initialize(RuntimeEnvironment.getApplication());
         Settings.preferences.edit().clear().commit();
+        OpenSections.all();
     }
 
     private Map<String, String> shippedSpanish;
@@ -125,16 +126,23 @@ public class SettingsTranslationTest {
     @Test public void settingsDirectionsNameTheHomeScreenIcon() {
         int directed = 0;
         for (Map.Entry<String, String> entry : englishIds().entrySet()) {
-            if (entry.getKey().equals("patch_controls") || !entry.getValue().contains("Patch controls")) continue;
+            if (!entry.getValue().contains("Patch controls")) continue;
             directed++;
             assertTrue(entry.getKey(), entry.getValue().contains("Messenger's home screen icon"));
         }
-        assertEquals(8, directed);
+        assertEquals(16, directed);
+        for (String key : List.of("access_help_menu", "hide_drawer_icon_help", "hide_menu_row_help", "menu_row_needs_shortcut"))
+            assertTrue(key, englishIds().get(key).contains("home screen icon"));
     }
 
     @Test public void everyShippedLocaleCoversEveryIdAndKeepsItsPlaceholders() {
         for (Map.Entry<String, Map<String, String>> locale : SettingsTranslations.LOCALES.entrySet())
             assertEquals(locale.getKey(), List.of(), problems(locale.getValue()));
+    }
+
+    /** English is what a translation that won't format falls back to, so a stray % there takes the screen down. */
+    @Test public void theEnglishTextFormats() {
+        assertEquals(List.of(), problems(englishIds()));
     }
 
     @Test public void theCheckFindsAMissingIdAnUnknownIdEmptyTextAndAChangedPlaceholder() {
@@ -206,7 +214,7 @@ public class SettingsTranslationTest {
             View root = screen.get().getWindow().getDecorView();
             assertEquals("ES Controls", ((TextView) root.findViewWithTag("tab_controls")).getText().toString());
             assertTrue(showsText(root, "ES Hide People You May Know"));
-            assertTrue(showsText(root, "ES Removes suggested people from chats, search and stories, and from the People and Notifications tabs."));
+            assertTrue(showsText(root, "ES Hides suggested people in chats, search and stories, and on the People and Notifications tabs. Good if you only want people you know."));
             assertFalse(showsText(root, "Hide People You May Know"));
             root.findViewWithTag("people").performClick();
             assertEquals(Map.of("people", true), Settings.preferences.getAll());
@@ -220,6 +228,56 @@ public class SettingsTranslationTest {
         assertEquals("ES 3 of 20 installed controls", new SettingsText(Locale.forLanguageTag("es-MX")).get("results_many", 3, 20));
         // "zxx" is the tag for no linguistic content, so no table will ever be added for it.
         assertEquals("3 of 20 installed controls", new SettingsText(Locale.forLanguageTag("zxx")).get("results_many", 3, 20));
+    }
+
+    @Test public void aTableThatGivesAnIdTwiceIsRefused() {
+        IllegalStateException refused = assertThrows(IllegalStateException.class,
+            () -> SettingsTranslations.add("zxx", new String[][] {{"controls", "A"}, {"apply", "B"}, {"controls", "C"}}));
+        assertEquals("zxx translates controls twice", refused.getMessage());
+        assertFalse(SettingsTranslations.LOCALES.containsKey("zxx"));
+    }
+
+    @Test public void traditionalChineseReachesEveryTraditionalTagAndSimplifiedStaysEnglish() {
+        String traditional = "功能控制";
+        for (String tag : new String[] {"zh-TW", "zh-Hant-TW", "zh-Hant", "zh-Hant-HK", "zh-Hant-MO", "zh-HK", "zh-MO", "zh-TW-u-nu-latn"})
+            assertEquals(tag, traditional, new SettingsText(Locale.forLanguageTag(tag)).get("controls"));
+        for (String tag : new String[] {"zh", "zh-CN", "zh-SG", "zh-Hans", "zh-Hans-CN", "zh-Hans-TW", "zh-Hans-HK", "ja-TW", "en-TW"})
+            assertEquals(tag, "Controls", new SettingsText(Locale.forLanguageTag(tag)).get("controls"));
+    }
+
+    @Test public void vietnameseReachesEveryVietnameseTag() {
+        for (String tag : new String[] {"vi", "vi-VN", "vi-US", "vi-VN-u-nu-latn"})
+            assertEquals(tag, "Điều khiển tính năng", new SettingsText(Locale.forLanguageTag(tag)).get("controls"));
+        assertEquals("Controls", new SettingsText(Locale.forLanguageTag("en-VN")).get("controls"));
+    }
+
+    @Test public void thaiReachesEveryThaiTag() {
+        for (String tag : new String[] {"th", "th-TH", "th-TH-u-nu-thai", "th-US"})
+            assertEquals(tag, "การควบคุม", new SettingsText(Locale.forLanguageTag(tag)).get("controls"));
+        assertEquals("Controls", new SettingsText(Locale.forLanguageTag("en-TH")).get("controls"));
+    }
+
+    @Test public void turkishReachesEveryTurkishTag() {
+        for (String tag : new String[] {"tr", "tr-TR", "tr-CY", "tr-DE"})
+            assertEquals(tag, "Kontroller", new SettingsText(Locale.forLanguageTag(tag)).get("controls"));
+        assertEquals("Controls", new SettingsText(Locale.forLanguageTag("en-TR")).get("controls"));
+    }
+
+    @Test public void traditionalChineseSearchFindsChineseLabelsAndEnglishAndKeepsPreferenceKeys() {
+        RuntimeEnvironment.setQualifiers("zh-rTW-w400dp-h800dp-mdpi");
+        try (var screen = Robolectric.buildActivity(SettingsActivity.class).setup()) {
+            View root = screen.get().getWindow().getDecorView();
+            assertEquals("功能控制", ((TextView) root.findViewWithTag("tab_controls")).getText().toString());
+            assertTrue(showsText(root, "隱藏你可能認識的人"));
+            root.findViewWithTag("people").performClick();
+            assertEquals(Map.of("people", true), Settings.preferences.getAll());
+            EditText search = root.findViewWithTag("find_control");
+            for (String query : new String[] {"你可能認識", "People You"}) {
+                search.setText(query);
+                assertTrue(query, root.findViewWithTag("people").isShown());
+                assertFalse(query, root.findViewWithTag("stories").isShown());
+            }
+        }
     }
 
     @Test public void setupScopesUseEnglishFallbackForEsUs() {
@@ -242,7 +300,7 @@ public class SettingsTranslationTest {
             String report = screen.get().getSystemService(android.content.ClipboardManager.class)
                 .getPrimaryClip().getItemAt(0).getText().toString();
             String prefix = translated ? "ES " : "";
-            assertTrue(report.contains(prefix + "Activity records show a control ran. They don't verify its visible effect or privacy protection.\n"));
+            assertTrue(report.contains(prefix + "Activity notes only show that a control ran. They don't prove it had a visible effect or protected your privacy.\n"));
             for (String[] control : SettingsActivity.CONTROLS)
                 assertTrue(control[0], report.contains(", scope=" + prefix + control[2] + "\n"));
             assertEquals(before, Settings.preferences.getAll());

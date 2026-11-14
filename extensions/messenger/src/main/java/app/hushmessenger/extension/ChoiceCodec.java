@@ -23,8 +23,10 @@ final class ChoiceCodec {
             if (installed.contains(key)) result.append(key).append('=')
                 .append(preferences.getBoolean(key, false)).append('\n');
         }
-        if (installed.contains("bubbles")) result.append(Settings.BUBBLE_CHAT_HEADS).append('=')
-            .append(preferences.getBoolean(Settings.BUBBLE_CHAT_HEADS, false)).append('\n');
+        for (Map.Entry<String, String> sub : Settings.SUB_SWITCHES.entrySet()) {
+            if (installed.contains(sub.getValue())) result.append(sub.getKey()).append('=')
+                .append(preferences.getBoolean(sub.getKey(), false)).append('\n');
+        }
         return result.toString();
     }
 
@@ -49,13 +51,18 @@ final class ChoiceCodec {
         return result;
     }
 
+    /** The document was read fine, it just isn't a backup: too big for one. */
+    static final class TooLarge extends IOException {
+        TooLarge() { super("Backup exceeds 16 KiB"); }
+    }
+
     static String read(InputStream stream) throws IOException {
         if (stream == null) throw new IOException("No readable document");
         ByteArrayOutputStream result = new ByteArrayOutputStream();
         byte[] bytes = new byte[4096];
         int length;
         while ((length = stream.read(bytes)) != -1) {
-            if (result.size() + length > MAX_BYTES) throw new IOException("Backup exceeds 16 KiB");
+            if (result.size() + length > MAX_BYTES) throw new TooLarge();
             result.write(bytes, 0, length);
         }
         return result.toString(StandardCharsets.UTF_8.name());
