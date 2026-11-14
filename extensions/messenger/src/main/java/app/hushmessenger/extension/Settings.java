@@ -333,8 +333,6 @@ public final class Settings {
     private static final String UNSENT_MEDIA_CALLBACK_HITS = "unsent_media_callback_hits";
     private static final String UNSENT_MEDIA_HITS = "unsent_media_hits";
     private static final String UNSENT_MEDIA_SAVED = "unsent_media_saved";
-    private static final long MAX_UNSENT_IMAGE_BYTES = 40L * 1024 * 1024;
-    private static final Object UNSENT_MEDIA_ARCHIVE_LOCK = new Object();
 
     private static synchronized void incrementUnsentCounter(String key) {
         SharedPreferences prefs = preferences;
@@ -698,8 +696,8 @@ public final class Settings {
 
     /**
      * Messenger 581 download callback: p0 is SUm (metadata in A07), p1 is the result object.
-     * Its Uri supplies the completed local path; Messenger resolves the filesystem File through
-     * A0F(localPath). The metadata directPath is a separate stable key for matching the image to its message.
+     * The completed result Uri is the local media source. direct_path is optional; when absent,
+     * the archive waits for an exact unique media-key-timestamp + MIME match from the message model.
      */
     public static void captureDownloadedImageFromCallback(Object downloader, Object result) {
         UnsentDiagnostics.record(appContext, "media.callback", "entered");
