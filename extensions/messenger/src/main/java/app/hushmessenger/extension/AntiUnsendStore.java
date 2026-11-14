@@ -191,8 +191,8 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
     }
 
     /**
-     * Record image metadata from the message model itself. The direct path plus media-key timestamp
-     * is the stable identity shared with the completed-download callback; no timestamp-only guessing.
+     * Record image metadata from the message model itself. Prefer the direct path; if it is absent,
+     * link only one pending file with the exact media-key timestamp and MIME type.
      */
     synchronized void captureMediaMetadataForMessage(String directPath, String messageId,
             String threadId, long mediaKeyTimestamp, String mimeType, long now) {
