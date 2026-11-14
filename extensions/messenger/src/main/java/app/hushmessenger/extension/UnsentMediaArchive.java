@@ -183,8 +183,8 @@ final class UnsentMediaArchive {
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return false;
 
         int sample = 1;
-        while (bounds.outWidth / (sample * 2) >= DECODE_BOUND &&
-                bounds.outHeight / (sample * 2) >= DECODE_BOUND) {
+        while (bounds.outWidth / (sample * 2) > DECODE_BOUND ||
+                bounds.outHeight / (sample * 2) > DECODE_BOUND) {
             sample *= 2;
         }
         BitmapFactory.Options options = new BitmapFactory.Options();
