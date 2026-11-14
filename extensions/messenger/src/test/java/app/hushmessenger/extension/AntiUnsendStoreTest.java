@@ -410,4 +410,36 @@ public class AntiUnsendStoreTest {
         }
     }
 
+
+    @Test public void existingMessageWithSameTimestampPreventsFallbackFromChoosingAnotherMessage() throws Exception {
+        long timestamp = 16001;
+        String mime = "image/png";
+        store.captureMediaMetadataForMessage("/known/direct-path", "m18", "thread-18",
+            timestamp, mime, 100);
+        java.io.File known = new java.io.File(RuntimeEnvironment.getApplication().getFilesDir(), "known-image.png");
+        java.io.File pending = new java.io.File(RuntimeEnvironment.getApplication().getFilesDir(), "unknown-image.png");
+        try {
+            assertTrue(known.createNewFile());
+            assertTrue(store.saveMediaFile("/known/direct-path", timestamp, known.getAbsolutePath(),
+                "known-content-hash", 105));
+            assertTrue(store.captureMediaMetadataForMessageWithoutDirectPath(
+                "m19", "thread-19", timestamp, mime, 110));
+
+            String hash = "unknown-content-hash";
+            String key = AntiUnsendStore.downloadedMediaKey(timestamp, mime, hash);
+            assertEquals(key, store.capturePendingDownloadedMedia(key, timestamp, mime, hash, 115));
+            assertTrue(pending.createNewFile());
+            assertTrue(store.saveMediaFileByKey(key, pending.getAbsolutePath(), hash, 120));
+
+            store.markUnsent("m18", 130);
+            store.markUnsent("m19", 131);
+            assertEquals(1, store.listUnsentMedia("m18").size());
+            assertTrue(store.listUnsentMedia("m19").isEmpty());
+            assertFalse(store.mediaIsLinked(key));
+        } finally {
+            known.delete();
+            pending.delete();
+        }
+    }
+
 }
