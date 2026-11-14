@@ -267,17 +267,19 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         SQLiteDatabase db = getWritableDatabase();
         if (hasOtherMessageMediaMetadata(db, messageId, mediaKeyTimestamp, mimeType)) return false;
         String pendingKey = null;
+        boolean pendingHasFile = false;
         int matches = 0;
-        try (Cursor cursor = db.query("media", new String[] {"media_key"},
-                "message_timestamp=? AND mime_type=? AND message_id IS NULL AND local_path IS NOT NULL AND content_hash IS NOT NULL",
+        try (Cursor cursor = db.query("media", new String[] {"media_key", "local_path"},
+                "message_timestamp=? AND mime_type=? AND message_id IS NULL AND content_hash IS NOT NULL",
                 new String[] {Long.toString(mediaKeyTimestamp), mimeType}, null, null,
                 "received_at DESC", "2")) {
             while (cursor.moveToNext()) {
                 matches++;
                 pendingKey = cursor.getString(0);
+                pendingHasFile = !cursor.isNull(1) && !cursor.getString(1).isEmpty();
             }
         }
-        if (matches != 1 || pendingKey == null) return false;
+        if (matches != 1 || pendingKey == null || !pendingHasFile) return false;
         long messageUnsentAt = 0;
         try (Cursor cursor = db.query("messages", new String[] {"unsent_at"},
                 "message_id=?", new String[] {messageId}, null, null, null, "1")) {
@@ -345,19 +347,27 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
                 return fallbackKey;
             }
         }
+        int pendingCandidates = 0;
+        try (Cursor cursor = db.query("media", new String[] {"media_key"},
+                "message_timestamp=? AND mime_type=? AND message_id IS NULL AND content_hash IS NOT NULL",
+                new String[] {Long.toString(mediaKeyTimestamp), mimeType}, null, null, null, "2")) {
+            while (cursor.moveToNext()) pendingCandidates++;
+        }
         String exactMessageKey = null;
         String exactLocalPath = null;
         String exactContentHash = null;
         int candidates = 0;
-        try (Cursor cursor = db.query("media", new String[] {"media_key", "local_path", "content_hash"},
-                "message_timestamp=? AND mime_type=? AND message_id IS NOT NULL AND message_id!=''",
-                new String[] {Long.toString(mediaKeyTimestamp), mimeType}, null, null,
-                "received_at DESC", "2")) {
-            while (cursor.moveToNext()) {
-                candidates++;
-                exactMessageKey = cursor.getString(0);
-                exactLocalPath = cursor.isNull(1) ? null : cursor.getString(1);
-                exactContentHash = cursor.isNull(2) ? null : cursor.getString(2);
+        if (pendingCandidates == 0) {
+            try (Cursor cursor = db.query("media", new String[] {"media_key", "local_path", "content_hash"},
+                    "message_timestamp=? AND mime_type=? AND message_id IS NOT NULL AND message_id!=''",
+                    new String[] {Long.toString(mediaKeyTimestamp), mimeType}, null, null,
+                    "received_at DESC", "2")) {
+                while (cursor.moveToNext()) {
+                    candidates++;
+                    exactMessageKey = cursor.getString(0);
+                    exactLocalPath = cursor.isNull(1) ? null : cursor.getString(1);
+                    exactContentHash = cursor.isNull(2) ? null : cursor.getString(2);
+                }
             }
         }
         boolean unfilledUniqueMessageRow = candidates == 1 && exactContentHash == null && exactLocalPath == null;
