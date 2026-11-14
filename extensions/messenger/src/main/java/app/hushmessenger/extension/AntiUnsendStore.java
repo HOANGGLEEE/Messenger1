@@ -267,19 +267,17 @@ final class AntiUnsendStore extends SQLiteOpenHelper {
         SQLiteDatabase db = getWritableDatabase();
         if (hasOtherMessageMediaMetadata(db, messageId, mediaKeyTimestamp, mimeType)) return false;
         String pendingKey = null;
-        boolean pendingHasFile = false;
         int matches = 0;
-        try (Cursor cursor = db.query("media", new String[] {"media_key", "local_path"},
+        try (Cursor cursor = db.query("media", new String[] {"media_key"},
                 "message_timestamp=? AND mime_type=? AND message_id IS NULL AND content_hash IS NOT NULL",
                 new String[] {Long.toString(mediaKeyTimestamp), mimeType}, null, null,
                 "received_at DESC", "2")) {
             while (cursor.moveToNext()) {
                 matches++;
                 pendingKey = cursor.getString(0);
-                pendingHasFile = !cursor.isNull(1) && !cursor.getString(1).isEmpty();
             }
         }
-        if (matches != 1 || pendingKey == null || !pendingHasFile) return false;
+        if (matches != 1 || pendingKey == null) return false;
         long messageUnsentAt = 0;
         try (Cursor cursor = db.query("messages", new String[] {"unsent_at"},
                 "message_id=?", new String[] {messageId}, null, null, null, "1")) {
